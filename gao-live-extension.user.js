@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.8
+// @version      0.2.9
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
