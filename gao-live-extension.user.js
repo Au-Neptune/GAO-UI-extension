@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.1
+// @version      0.2.8
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -15,10 +15,12 @@
   const HIDDEN = "gao-ext-hidden";
   const RESTORE_PATTERN = /(HP|MP|生命|魔力)/i;
   const MAX_DELAY_MS = 80;
-  const FORGE_HISTORY_KEY = "gao-ext-forge-history-v1";
-  const FORGE_HISTORY_LIMIT = 24;
   const MAX_FORGE_ROWS = 48;
-  const FORGE_MATCH_WINDOW_MS = 60 * 1000;
+  const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
+  const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
+  const FORGE_HISTORY_LIMIT = 24;
+  const PENDING_CRAFT_REQUEST_WINDOW_MS = 2 * 60 * 1000;
+  const PENDING_FORGE_REPLAY_CONTEXT_WINDOW_MS = 10 * 1000;
   const DEFAULT_OBSERVER_OPTIONS = {
     childList: true,
     subtree: true,
@@ -29,41 +31,148 @@
     characterData: true,
     attributes: true,
   };
-  const INVENTORY_ACQUIRED_AT_PATTERN =
-    /時間\s*[·:：]\s*(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/;
-  const PAD_WIDTH = 2;
-  const QUALITY_PREFIX_PATTERN = /^[^\s]+\s+的\s+/;
-  const RECIPE_TYPE_TO_KEY = {
-    短刀: "dagger",
-    細劍: "rapier",
-    單手劍: "sword",
-    盾牌: "shield",
-    大衣: "coat",
-    盔甲: "armor",
-    太刀: "katana",
-    弓: "bow",
-    雙手劍: "greatsword",
-    雙手斧: "axe",
-    手槍: "pistol",
-    衝鋒槍: "smg",
-    輕機槍: "lmg",
-    狙擊槍: "sniper",
+  const INVENTORY_CATEGORY_KEYS = [
+    "all",
+    "weapon",
+    "material",
+    "consumable",
+    "skillbook",
+    "ammo",
+  ];
+  const INVENTORY_COLOR_OPTIONS = [
+    { key: "red", label: "紅", hex: "#ff5a5a" },
+    { key: "orange", label: "橙", hex: "#ff9f43" },
+    { key: "yellow", label: "黃", hex: "#ffd23f" },
+    { key: "green", label: "綠", hex: "#4ade80" },
+    { key: "blue", label: "藍", hex: "#38bdf8" },
+    { key: "purple", label: "紫", hex: "#c084fc" },
+  ];
+  const INVENTORY_SORT_KEY_BY_LABEL = {
+    品質: "quality",
+    種類: "type",
+    時間: "time",
+    攻: "atk",
+    防: "def",
+    幸: "luck",
+    重: "weight",
+    耐: "dur",
   };
-  const FLAVOR_TYPE_PATTERNS = [
-    ["dagger", /短刀|匕首/],
-    ["rapier", /細劍|刺劍/],
-    ["sword", /單手劍/],
-    ["shield", /盾/],
-    ["coat", /大衣|外衣/],
-    ["armor", /盔甲|鎧甲/],
-    ["katana", /太刀/],
-    ["bow", /弓/],
-    ["greatsword", /雙手劍|巨劍/],
-    ["axe", /雙手斧|戰斧/],
-    ["pistol", /手槍/],
-    ["smg", /衝鋒槍/],
-    ["lmg", /輕機槍|機槍/],
-    ["sniper", /狙擊槍|狙擊步槍/],
+  const INVENTORY_COLOR_ROW_LABEL = "顏色 ·";
+  const INVENTORY_ACTIVE_COLOR_BORDER = "2px solid var(--text-primary)";
+  const INVENTORY_ACTIVE_COLOR_GLOW = "0 0 0 1px";
+  const INVENTORY_EQUIPMENT_CELL_SELECTOR =
+    ".inv-center .grid-wrap .cell.cell--filled";
+  const INVENTORY_SELECTED_EQUIPMENT_CELL_SELECTOR =
+    ".inv-center .grid-wrap .cell.cell--selected";
+  const EQUIPMENT_QUALITY_ROLL_KEY = "quality";
+  const INVENTORY_BASE_STAT_FIELDS = [
+    { key: "atk", statLabel: "ATK", rollKey: "atk" },
+    { key: "def", statLabel: "DEF", rollKey: "def" },
+    { key: "luck", statLabel: "LUCK", rollKey: "luck" },
+    { key: "weight", statLabel: "WT", rollKey: "weight" },
+    { key: "durability", statLabel: "DUR", rollKey: "durability" },
+  ];
+  const PAD_WIDTH = 2;
+  const CRAFT_HOOK_FLAG = "__gaoExtCraftHookInstalled";
+  const qualityTable = [
+    {
+      name: "傳說",
+      qualityMult: 2.3,
+      weightMult: 0.82,
+      min: 0.984,
+      max: Infinity,
+    },
+    {
+      name: "神話",
+      qualityMult: 2.1,
+      weightMult: 0.84,
+      min: 0.9648,
+      max: 0.984,
+    },
+    {
+      name: "史詩",
+      qualityMult: 2,
+      weightMult: 0.85,
+      min: 0.932,
+      max: 0.9648,
+    },
+    {
+      name: "完美",
+      qualityMult: 1.85,
+      weightMult: 0.87,
+      min: 0.8784,
+      max: 0.932,
+    },
+    {
+      name: "頂級",
+      qualityMult: 1.65,
+      weightMult: 0.88,
+      min: 0.8024,
+      max: 0.8784,
+    },
+    {
+      name: "精良",
+      qualityMult: 1.5,
+      weightMult: 0.9,
+      min: 0.7072,
+      max: 0.8024,
+    },
+    {
+      name: "高級",
+      qualityMult: 1.33,
+      weightMult: 0.93,
+      min: 0.6,
+      max: 0.7072,
+    },
+    {
+      name: "上等",
+      qualityMult: 1.16,
+      weightMult: 0.96,
+      min: 0.4928,
+      max: 0.6,
+    },
+    {
+      name: "普通",
+      qualityMult: 1,
+      weightMult: 1,
+      min: 0.3976,
+      max: 0.4928,
+    },
+    {
+      name: "次等",
+      qualityMult: 0.9,
+      weightMult: 1.01,
+      min: 0.3216,
+      max: 0.3976,
+    },
+    {
+      name: "劣質",
+      qualityMult: 0.8,
+      weightMult: 1.02,
+      min: 0.268,
+      max: 0.3216,
+    },
+    {
+      name: "破爛",
+      qualityMult: 0.7,
+      weightMult: 1.03,
+      min: 0.2344,
+      max: 0.268,
+    },
+    {
+      name: "垃圾般",
+      qualityMult: 0.55,
+      weightMult: 1.06,
+      min: 0.216,
+      max: 0.2344,
+    },
+    {
+      name: "屎一般",
+      qualityMult: 0.4,
+      weightMult: 1.1,
+      min: -Infinity,
+      max: 0.216,
+    },
   ];
 
   let currentPath = "";
@@ -74,11 +183,32 @@
   let forgeStatus = "";
   let forgeStatusTone = "";
   let forgeReplayBusy = false;
+  let pendingForgeReplayContext = null;
+  const pendingCraftRequests = [];
+  let latestForgeInventory = [];
+  let inventoryItems = [];
+  let inventoryById = new Map();
+  let equipmentItems = [];
+  let equipmentById = new Map();
   const warnings = new Set();
 
   function boot() {
-    injectStyles();
+    installNetworkHooks();
     hookRouteChanges();
+    if (document.readyState === "loading") {
+      document.addEventListener(
+        "DOMContentLoaded",
+        () => {
+          injectStyles();
+          mountForRoute();
+        },
+        {
+          once: true,
+        },
+      );
+      return;
+    }
+    injectStyles();
     mountForRoute();
   }
 
@@ -97,7 +227,7 @@
     }
     if (path === "/inventory") {
       return mountMainObservedPage(() => {
-        syncInventoryForgeMaterials();
+        syncInventoryDetailEnhancements();
       }, INVENTORY_OBSERVER_OPTIONS);
     }
     if (path === "/forge") return mountForgePage();
@@ -118,7 +248,6 @@
   }
 
   function mountForgePage() {
-    console.log("mountForgePage");
     const root = findForgeRoot();
     if (!root) {
       disconnectPageObserver();
@@ -157,7 +286,29 @@
 
   function mountForgeObservedPage(parts) {
     const refresh = () => {
-      bindForgeCommitButtons();
+      for (const button of document.querySelectorAll(".recipe__cta")) {
+        if (button.dataset.gaoExtBound === "1") continue;
+        button.dataset.gaoExtBound = "1";
+        button.addEventListener(
+          "click",
+          () => {
+            if (button.disabled) return;
+            const recipe = button.closest(".recipe");
+            if (!recipe) return;
+            const recipeId = readForgeRecipeId(recipe);
+            const recipeName = readForgeRecipeName(recipe);
+            if (!recipeId && !recipeName) return;
+            pendingForgeReplayContext = {
+              capturedAt: Date.now(),
+              recipeId,
+              recipeName,
+            };
+          },
+          {
+            capture: true,
+          },
+        );
+      }
       syncForgeHistoryPanel();
     };
     refresh();
@@ -197,6 +348,205 @@
       };
     }
     addEventListener("popstate", scheduleMountForRoute);
+  }
+
+  function installNetworkHooks() {
+    if (window[CRAFT_HOOK_FLAG] === "1") return;
+    window[CRAFT_HOOK_FLAG] = "1";
+    if (typeof window.fetch !== "function") return;
+    const originalFetch = window.fetch;
+    window.fetch = async function gaoExtFetch(...args) {
+      const [requestInfo, requestInit] = args;
+      const url = typeof requestInfo === "string"
+        ? requestInfo
+        : requestInfo instanceof URL
+          ? requestInfo.toString()
+          : requestInfo?.url
+            ? String(requestInfo.url)
+            : "";
+      const flags = {
+        isCraftRequest: requestPathMatches(url, /\/craft\/?$/i),
+        isRecipesRequest: requestPathMatches(url, /\/recipes\/?$/i),
+        isInventoryItemsRequest: requestPathMatches(url, /\/api\/inventory\/?$/i),
+        isEquipmentRequest: requestPathMatches(url, /\/api\/forge\/equipment\/?$/i),
+      };
+      let pendingRequestId = "";
+      if (flags.isCraftRequest) {
+        const body = requestInit?.body;
+        const bodyText =
+          typeof body === "string"
+            ? body
+            : body instanceof URLSearchParams
+              ? body.toString()
+              : typeof requestInfo?.body === "string"
+                ? requestInfo.body
+                : "";
+        const payload = parseJsonText(bodyText);
+        if (payload) {
+          pendingRequestId = queueCraftRequest(payload);
+        }
+      }
+      const response = await originalFetch.apply(this, args);
+      if (flags.isCraftRequest && !response?.ok && pendingRequestId) {
+        const index = pendingCraftRequests.findIndex(
+          (request) => request.id === pendingRequestId,
+        );
+        if (index >= 0) {
+          pendingCraftRequests.splice(index, 1);
+        }
+      }
+      console.log(
+        "GAO extension: inspecting fetch response for",
+        url,
+        response,
+      );
+      await handleHookedFetchResponse(url, response, flags);
+      return response;
+    };
+  }
+
+  function requestPathMatches(url, pattern) {
+    if (!url) return false;
+    try {
+      return pattern.test(new URL(url, location.origin).pathname);
+    } catch {
+      return pattern.test(String(url));
+    }
+  }
+
+  async function handleHookedFetchResponse(url, response, flags) {
+    if (
+      !response?.ok ||
+      (!flags.isCraftRequest &&
+        !flags.isRecipesRequest &&
+        !flags.isInventoryItemsRequest &&
+        !flags.isEquipmentRequest)
+    ) {
+      return;
+    }
+    try {
+      const payload = parseJsonText(await response.clone().text());
+      if (!payload) return;
+      if (flags.isRecipesRequest) {
+        mergeForgeMaterialMapFromInventory(payload?.inventory);
+        return;
+      }
+      if (flags.isInventoryItemsRequest) {
+        inventoryItems = Array.isArray(payload?.items) ? payload.items : [];
+        inventoryById = buildInventoryById(inventoryItems);
+        return;
+      }
+      if (flags.isEquipmentRequest) {
+        equipmentItems = Array.isArray(payload?.equipment)
+          ? payload.equipment
+          : [];
+        equipmentById = buildInventoryById(equipmentItems);
+        return;
+      }
+      if (flags.isCraftRequest) {
+        handleCraftResponse(payload);
+      }
+    } catch (error) {
+      console.error("GAO extension: fetch hook failed.", url, error);
+    }
+  }
+
+  function buildInventoryById(items) {
+    const next = new Map();
+    for (const item of items) {
+      const itemId = normalizeNumericId(item?.id);
+      if (!itemId) continue;
+      next.set(itemId, item);
+    }
+    return next;
+  }
+
+  function queueCraftRequest(payload) {
+    let replayContext = null;
+    if (pendingForgeReplayContext) {
+      const context = pendingForgeReplayContext;
+      pendingForgeReplayContext = null;
+      if (
+        Date.now() - context.capturedAt <=
+        PENDING_FORGE_REPLAY_CONTEXT_WINDOW_MS
+      ) {
+        replayContext = context;
+      }
+    }
+    const resultItemId = normalizeNumericId(payload?.result_item_id);
+    const weaponName = String(payload?.weapon_name || "").trim();
+    const recipeId =
+      normalizeForgeRecipeId(payload?.recipe_id) ||
+      replayContext?.recipeId ||
+      "";
+    const recipeName = String(
+      replayContext?.recipeName || payload?.name || "",
+    ).trim();
+    const materials = resolveCraftRequestMaterials(payload?.materials);
+    const request =
+      resultItemId && weaponName && materials.length > 0
+        ? {
+            id: `craft-request-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            capturedAt: new Date().toISOString(),
+            resultItemId,
+            weaponName,
+            recipeId,
+            recipeName,
+            materials,
+          }
+        : null;
+    if (!request) return "";
+    prunePendingCraftRequests();
+    pendingCraftRequests.push(request);
+    return request.id;
+  }
+
+  function resolveCraftRequestMaterials(materials) {
+    if (!Array.isArray(materials) || materials.length === 0) return [];
+    if (latestForgeInventory.length > 0) {
+      const materialMap = readForgeMaterialMap();
+      const missingIds = materials
+        .map((material) => normalizeNumericId(material?.item_id))
+        .filter((itemId) => itemId && !materialMap[String(itemId)]);
+      if (missingIds.length > 0) {
+        mergeForgeMaterialMapFromInventory(latestForgeInventory);
+      }
+    }
+    const materialMap = readForgeMaterialMap();
+    const resolved = [];
+    for (const material of materials) {
+      const itemId = normalizeNumericId(material?.item_id);
+      const quantity = Number(material?.quantity || 0);
+      const name = itemId ? materialMap[String(itemId)] : "";
+      if (!itemId || quantity < 1 || !name) {
+        console.error("GAO extension: forge material map miss.", {
+          material,
+          materialMap,
+        });
+        return [];
+      }
+      resolved.push({ name, quantity });
+    }
+    return resolved;
+  }
+
+  function prunePendingCraftRequests() {
+    const cutoff = Date.now() - PENDING_CRAFT_REQUEST_WINDOW_MS;
+    for (let index = pendingCraftRequests.length - 1; index >= 0; index -= 1) {
+      const requestTime = Date.parse(pendingCraftRequests[index].capturedAt);
+      if (!Number.isNaN(requestTime) && requestTime >= cutoff) continue;
+      pendingCraftRequests.splice(index, 1);
+    }
+  }
+
+  function parseJsonText(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
   }
 
   function schedulePageRefresh(refresh) {
@@ -289,61 +639,118 @@
       .gao-ext-material-block { margin-top: var(--s-4); border-top: 1px solid var(--border-soft); padding-top: var(--s-4); padding-bottom: var(--s-4); display: flex; flex-direction: column; gap: var(--s-2); }
       .gao-ext-material-title { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.08em; }
       .gao-ext-material-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
-      .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); },
+      .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+      .gao-ext-inline-stat { margin-left: 4px; font-size: 11px; color: var(--text-tertiary); }
+      .gao-ext-inline-stat[data-state="error"] { color: var(--danger-300, #ff8a8a); }
     `;
     document.head.appendChild(style);
   }
 
-  function bindForgeCommitButtons() {
-    for (const button of document.querySelectorAll(".recipe__cta")) {
-      if (button.dataset.gaoExtBound === "1") continue;
-      button.dataset.gaoExtBound = "1";
-      button.addEventListener("click", () => captureForgeHistory(button));
+  function mergeForgeMaterialMapFromInventory(inventory) {
+    if (!Array.isArray(inventory) || inventory.length === 0) return;
+    latestForgeInventory = inventory;
+    const materialMap = readForgeMaterialMap();
+    let changed = false;
+    for (const item of inventory) {
+      const itemId = normalizeNumericId(item?.item_id);
+      const name = String(item?.name || "").trim();
+      if (!itemId || !name || materialMap[String(itemId)] === name) continue;
+      materialMap[String(itemId)] = name;
+      changed = true;
+    }
+    if (changed) {
+      writeForgeMaterialMap(materialMap);
     }
   }
 
-  // 把當前配方畫面上的材料、名稱與 recipe 資訊擷取成快照，
-  // 寫入 localStorage 供後續回放與背包比對使用。
-  function captureForgeHistory(button) {
-    if (button.disabled) return;
-    const recipe = button.closest(".recipe");
-    if (!recipe) return;
-    const materials = [...recipe.querySelectorAll(".mat-row")]
-      .map((row) => {
-        const name = row
-          .querySelector(".mat-row__sel-name")
-          ?.textContent.trim();
-        const qty = Number(row.querySelector(".qval")?.textContent.trim() || 0);
-        if (!name || name.includes("選擇材料") || qty < 1) return null;
-        return { name, qty };
-      })
-      .filter(Boolean);
-    if (materials.length === 0) return;
-    const recipeName =
-      recipe.querySelector(".recipe__name")?.textContent.trim() || "未命名配方";
+  function readForgeMaterialMap() {
+    try {
+      const raw = localStorage.getItem(FORGE_MATERIAL_MAP_KEY);
+      const parsed = JSON.parse(raw || "{}");
+      return normalizeForgeMaterialMap(parsed);
+    } catch (error) {
+      console.error(error);
+      return {};
+    }
+  }
+
+  function writeForgeMaterialMap(materialMap) {
+    try {
+      localStorage.setItem(
+        FORGE_MATERIAL_MAP_KEY,
+        JSON.stringify(normalizeForgeMaterialMap(materialMap)),
+      );
+    } catch (error) {
+      console.error(error);
+      setForgeStatus("鍛造材料對照表儲存失敗，請查看 console 錯誤。", "error");
+    }
+  }
+
+  function normalizeForgeMaterialMap(materialMap) {
+    if (!materialMap || typeof materialMap !== "object") return {};
+    const normalizedEntries = [];
+    for (const [itemId, name] of Object.entries(materialMap)) {
+      const normalizedId = normalizeNumericId(itemId);
+      const normalizedName = String(name || "").trim();
+      if (!normalizedId || !normalizedName) continue;
+      normalizedEntries.push([String(normalizedId), normalizedName]);
+    }
+    return Object.fromEntries(normalizedEntries);
+  }
+
+  function handleCraftResponse(payload) {
+    const craftedId = normalizeNumericId(payload?.crafted?.id);
+    if (!craftedId) return;
+    prunePendingCraftRequests();
+    const craftedItemId = normalizeNumericId(payload?.crafted?.item_id);
+    const weaponName = String(payload?.crafted?.weapon_name || "").trim();
+    let request = null;
+    for (let index = pendingCraftRequests.length - 1; index >= 0; index -= 1) {
+      const pendingRequest = pendingCraftRequests[index];
+      if (craftedItemId && pendingRequest.resultItemId !== craftedItemId) continue;
+      if (weaponName && pendingRequest.weaponName !== weaponName) continue;
+      request = pendingCraftRequests.splice(index, 1)[0];
+      break;
+    }
+    if (!request) {
+      console.error(
+        `GAO extension: /craft response #${craftedId} has no pending request.`,
+        payload,
+      );
+      setForgeStatus("收到 /craft 回應，但找不到對應的鍛造請求。", "error");
+      syncForgeHistoryPanel();
+      return;
+    }
+    const crafted = payload.crafted;
+    const recipeName = String(request.recipeName || payload?.name || "").trim();
     const entry = {
-      id: `forge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: new Date().toISOString(),
-      recipeId:
-        recipe.querySelector(".recipe__id")?.textContent.trim() || "UNKNOWN",
+      id: `crafted-${craftedId}`,
+      craftedId,
+      atk: Number(crafted?.atk || 0),
+      def: Number(crafted?.def || 0),
+      luck: Number(crafted?.luck || 0),
+      weight: Number(crafted?.weight || 0),
+      durability: Number(crafted?.durability || 0),
+      createdAt: String(crafted?.created_at || request.capturedAt || ""),
+      weaponName: String(crafted?.weapon_name || ""),
+      recipeId: normalizeForgeRecipeId(request.recipeId),
       recipeName,
       weaponType: recipeName,
-      weaponTypeKey: RECIPE_TYPE_TO_KEY[recipeName] || "",
-      recipeDesc:
-        recipe.querySelector(".recipe__desc")?.textContent.trim() || "",
-      weaponName: findForgeNameInput()?.value.trim() || "",
-      requiredQty: Number(
-        (recipe.querySelector(".recipe__count")?.textContent || "")
-          .split("/")[1]
-          ?.trim() || 0,
-      ),
-      materials,
+      name_rolls:
+        crafted?.name_rolls && typeof crafted.name_rolls === "object"
+          ? crafted.name_rolls
+          : {},
+      qualityName: String(payload.qualityName || ""),
+      materials: request.materials,
     };
-    writeForgeHistory(
-      [entry, ...readForgeHistory()].slice(0, FORGE_HISTORY_LIMIT),
+    const history = readForgeHistory().filter(
+      (item) =>
+        item.id !== entry.id &&
+        (!item.craftedId || item.craftedId !== entry.craftedId),
     );
+    writeForgeHistory([entry, ...history].slice(0, FORGE_HISTORY_LIMIT));
     setForgeStatus(
-      `已記錄 ${entry.recipeName} / ${entry.weaponName || "未命名"} 的材料配置。`,
+      `已記錄 ${describeForgeRecipe(entry)} / ${entry.weaponName || "未命名"} #${craftedId}。`,
       "success",
     );
     syncForgeHistoryPanel();
@@ -355,9 +762,7 @@
     if (location.pathname !== "/forge") return;
     const root = findForgeRoot();
     const recipeSection = root?.querySelectorAll("section")?.[1];
-    const legend = root?.querySelector(".legend");
-    if (!root || !recipeSection || !legend) return;
-
+    if (!root || !recipeSection) return;
     let details = root.querySelector(`[${ATTR}="forge-history"]`);
     if (!details) {
       details = document.createElement("details");
@@ -368,29 +773,43 @@
       const panel = document.createElement("div");
       panel.className = "gao-ext-panel";
       details.append(summary, panel);
-      // 履歷內容會整塊 replaceChildren，改用事件代理，
-      // 讓重播/刪除按鈕不用每次重綁監聽器。
       details.addEventListener("click", (event) => {
         const button = event.target.closest("[data-gao-ext-action]");
         if (!button) return;
         event.preventDefault();
         if (button.dataset.gaoExtAction === "replay-forge") {
-          replayForgeHistory(button);
+          void replayForgeHistory(button);
           return;
         }
-        if (button.dataset.gaoExtAction === "delete-forge-history") {
-          deleteForgeHistoryEntry(button);
+        if (button.dataset.gaoExtAction !== "delete-forge-history") return;
+        const entryId = button.dataset.entryId;
+        if (!entryId) return;
+        const history = readForgeHistory();
+        const entry = history.find((item) => item.id === entryId);
+        if (!entry) {
+          setForgeStatus("找不到要刪除的鍛造紀錄。", "error");
+          syncForgeHistoryPanel();
+          return;
         }
+        writeForgeHistory(history.filter((item) => item.id !== entryId));
+        setForgeStatus(
+          `已刪除 ${entry.weaponName || "未命名"} 的鍛造紀錄。`,
+          "success",
+        );
+        syncForgeHistoryPanel();
       });
-      root.insertBefore(details, recipeSection);
-    } else if (details.nextElementSibling !== recipeSection) {
+    }
+    if (details.nextElementSibling !== recipeSection) {
       root.insertBefore(details, recipeSection);
     }
-
     const isOpen = details.open;
     const panel = details.querySelector(".gao-ext-panel");
-    const nodes = [];
+    panel.replaceChildren(...buildForgeHistoryPanelNodes(readForgeHistory()));
+    details.open = isOpen;
+  }
 
+  function buildForgeHistoryPanelNodes(history) {
+    const nodes = [];
     if (forgeStatus) {
       const status = document.createElement("div");
       status.className = "gao-ext-history-status";
@@ -398,63 +817,72 @@
       setTextIfChanged(status, forgeStatus);
       nodes.push(status);
     }
-
-    const history = readForgeHistory();
     if (history.length === 0) {
       const empty = document.createElement("div");
       empty.className = "gao-ext-history-empty";
       setTextIfChanged(empty, "目前還沒有鍛造紀錄。");
       nodes.push(empty);
-    } else {
-      const list = document.createElement("div");
-      list.className = "gao-ext-history-list";
-      for (const entry of history) {
-        const item = document.createElement("article");
-        item.className = "gao-ext-history-entry";
-        const name = escapeHtml(entry.weaponName || "未命名");
-        const meta = escapeHtml(
-          `${entry.recipeId} · ${entry.recipeName} · ${formatForgeTime(entry.createdAt)}`,
-        );
-        const materials = escapeHtml(
-          entry.materials
-            .map((material) => `${material.name}×${material.qty}`)
-            .join(", "),
-        );
-        const disabled = forgeReplayBusy ? "disabled" : "";
-        item.innerHTML = `
-          <div class="gao-ext-history-head">
-            <strong class="gao-ext-history-name">${name}</strong>
-            <span class="gao-ext-history-meta">${meta}</span>
-          </div>
-          <div class="gao-ext-history-actions">
-            <div class="gao-ext-history-materials">${materials}</div>
-            <button
-              type="button"
-              class="chip gao-ext-organize gao-ext-history-replay"
-              data-gao-ext-action="replay-forge"
-              data-entry-id="${entry.id}"
-              ${disabled}
-            >再鍛一次</button>
-            <button
-              type="button"
-              class="chip gao-ext-history-delete"
-              data-gao-ext-action="delete-forge-history"
-              data-entry-id="${entry.id}"
-              ${disabled}
-            >移除</button>
-          </div>
-        `;
-        list.appendChild(item);
-      }
-      nodes.push(list);
+      return nodes;
     }
-
-    panel.replaceChildren(...nodes);
-    details.open = isOpen;
+    const list = document.createElement("div");
+    list.className = "gao-ext-history-list";
+    for (const entry of history) {
+      const item = document.createElement("article");
+      item.className = "gao-ext-history-entry";
+      const name = escapeHtml(entry.weaponName || "未命名");
+      const meta = escapeHtml(buildForgeHistoryMeta(entry));
+      const disabled = forgeReplayBusy ? "disabled" : "";
+      const materials = escapeHtml(
+        entry.materials
+          .map((material) => `${material.name}×${material.quantity}`)
+          .join(", "),
+      );
+      item.innerHTML = `
+        <div class="gao-ext-history-head">
+          <strong class="gao-ext-history-name">${name}</strong>
+          <span class="gao-ext-history-meta">${meta}</span>
+        </div>
+        <div class="gao-ext-history-actions">
+          <div class="gao-ext-history-materials">${materials}</div>
+          <button
+            type="button"
+            class="chip gao-ext-organize gao-ext-history-replay"
+            data-gao-ext-action="replay-forge"
+            data-entry-id="${entry.id}"
+            ${disabled}
+          >再鍛一次</button>
+          <button
+            type="button"
+            class="chip gao-ext-history-delete"
+            data-gao-ext-action="delete-forge-history"
+            data-entry-id="${entry.id}"
+            ${disabled}
+          >移除</button>
+        </div>
+      `;
+      list.appendChild(item);
+    }
+    nodes.push(list);
+    return nodes;
   }
 
-  // 這層只負責回放流程的忙碌狀態、訊息與錯誤呈現，
-  // 真正的 DOM 回填細節交給 restoreForgeRecipe。
+  function buildForgeHistoryMeta(entry) {
+    const parts = [];
+    if (entry.craftedId) parts.push(`#${entry.craftedId}`);
+    if (entry.qualityName) parts.push(entry.qualityName);
+    if (entry.recipeName || entry.weaponType) {
+      parts.push(entry.recipeName || entry.weaponType);
+    }
+    if (entry.createdAt) {
+      parts.push(
+        new Date(entry.createdAt).toLocaleString("zh-TW", {
+          hour12: false,
+        }),
+      );
+    }
+    return parts.join(" · ");
+  }
+
   async function replayForgeHistory(button) {
     if (forgeReplayBusy) return;
     const entry = readForgeHistory().find(
@@ -467,12 +895,13 @@
     }
     forgeReplayBusy = true;
     button.disabled = true;
-    setForgeStatus(`正在回填 ${entry.recipeName} 的材料與名稱...`, "success");
+    const recipeLabel = describeForgeRecipe(entry);
+    setForgeStatus(`正在回填 ${recipeLabel} 的材料與名稱...`, "success");
     syncForgeHistoryPanel();
     try {
       await restoreForgeRecipe(entry);
       setForgeStatus(
-        `已回填 ${entry.recipeName} / ${entry.weaponName || "未命名"}。`,
+        `已回填 ${recipeLabel} / ${entry.weaponName || "未命名"}。`,
         "success",
       );
     } catch (error) {
@@ -484,149 +913,228 @@
     }
   }
 
-  function deleteForgeHistoryEntry(button) {
-    if (forgeReplayBusy) return;
-    const entryId = button.dataset.entryId;
-    if (!entryId) return;
-    const history = readForgeHistory();
-    const entry = history.find((item) => item.id === entryId);
-    if (!entry) {
-      setForgeStatus("找不到要刪除的鍛造紀錄。", "error");
-      syncForgeHistoryPanel();
-      return;
+  async function restoreForgeRecipe(entry) {
+    if (entry.materials.length === 0) {
+      throw new Error("GAO extension: forge history has no materials.");
     }
-    writeForgeHistory(history.filter((item) => item.id !== entryId));
-    setForgeStatus(
-      `已刪除 ${entry.recipeName} / ${entry.weaponName || "未命名"} 的鍛造紀錄。`,
-      "success",
+    const nameInput = document.querySelector(
+      'main.forge-main input[type="text"], main.forge-main input',
     );
-    syncForgeHistoryPanel();
+    if (!nameInput) {
+      throw new Error("GAO extension: forge name input not found.");
+    }
+    if (!findForgeRecipeByHistoryEntry(entry)) {
+      throw new Error(
+        `GAO extension: recipe ${describeForgeRecipe(entry)} not found.`,
+      );
+    }
+    setInputValue(nameInput, entry.weaponName || "");
+    await waitForForgeUi();
+    await resetForgeRecipeRows(entry);
+    await ensureForgeRecipeRowCount(entry);
+    for (const [rowIndex, material] of entry.materials.entries()) {
+      await restoreForgeRecipeMaterial(entry, rowIndex, material);
+    }
   }
 
-  // 依履歷逐步操作現有鍛造 UI：重設列數、搜尋材料、補數量，
-  // 故意走真實事件鏈，讓站內反應與手動操作一致。
-  async function restoreForgeRecipe(entry) {
-    const nameInput = findForgeNameInput();
-    if (!nameInput)
-      throw new Error("GAO extension: forge name input not found.");
-    const findRecipe = () =>
-      [...document.querySelectorAll(".recipe")].find(
-        (recipe) =>
-          recipe.querySelector(".recipe__id")?.textContent.trim() ===
-          entry.recipeId,
-      );
-    if (!findRecipe())
-      throw new Error(`GAO extension: recipe ${entry.recipeId} not found.`);
+  function findForgeRecipeByHistoryEntry(entry) {
+    const expectedRecipeId = normalizeForgeRecipeId(entry.recipeId);
+    const expectedRecipeName = String(
+      entry.recipeName || entry.weaponType || "",
+    ).trim();
+    return (
+      [...document.querySelectorAll(".recipe")].find((recipe) => {
+        if (
+          expectedRecipeId &&
+          readForgeRecipeId(recipe) === expectedRecipeId
+        ) {
+          return true;
+        }
+        return Boolean(
+          expectedRecipeName &&
+          readForgeRecipeName(recipe) === expectedRecipeName,
+        );
+      }) ?? null
+    );
+  }
 
-    const waitForUi = () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => setTimeout(resolve, MAX_DELAY_MS));
-      });
-    // 單純呼叫 click() 有時不會觸發站內自訂互動，
-    // 這裡補完整的 pointer/mouse 事件鏈來模擬真人操作。
-    const triggerClick = (element) => {
-      if (!element) return;
-      const pointerSupported = typeof PointerEvent === "function";
-      const pointerInit = { bubbles: true, cancelable: true, pointerId: 1 };
-      const mouseInit = { bubbles: true, cancelable: true, buttons: 1 };
-      if (pointerSupported) {
-        element.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
-      }
-      element.dispatchEvent(new MouseEvent("mousedown", mouseInit));
-      if (pointerSupported) {
-        element.dispatchEvent(new PointerEvent("pointerup", pointerInit));
-      }
-      element.dispatchEvent(new MouseEvent("mouseup", mouseInit));
-      element.dispatchEvent(new MouseEvent("click", mouseInit));
-    };
-
-    setInputValue(nameInput, entry.weaponName || "");
-    await waitForUi();
-
-    // 先把現有材料列清空，再擴到目標列數，
-    // 後面才能按履歷順序一列列回填材料與數量。
-    for (let i = 0; i < MAX_FORGE_ROWS; i += 1) {
-      const recipe = findRecipe();
+  async function resetForgeRecipeRows(entry) {
+    for (let index = 0; index < MAX_FORGE_ROWS; index += 1) {
+      const recipe = findForgeRecipeByHistoryEntry(entry);
       const remove = recipe?.querySelector(".mat-row__rm");
-      if (!remove) break;
-      triggerClick(remove);
-      await waitForUi();
+      if (!remove) return;
+      triggerForgeClick(remove);
+      await waitForForgeUi();
     }
-    if (findRecipe()?.querySelector(".mat-row__rm")) {
+    if (findForgeRecipeByHistoryEntry(entry)?.querySelector(".mat-row__rm")) {
       throw new Error(
-        `GAO extension: failed to reset recipe ${entry.recipeId}.`,
+        `GAO extension: failed to reset recipe ${describeForgeRecipe(entry)}.`,
       );
     }
+  }
 
-    for (let i = 0; i < MAX_FORGE_ROWS; i += 1) {
-      const recipe = findRecipe();
+  async function ensureForgeRecipeRowCount(entry) {
+    const targetCount = entry.materials.length;
+    for (let index = 0; index < MAX_FORGE_ROWS; index += 1) {
+      const recipe = findForgeRecipeByHistoryEntry(entry);
       const rowCount = recipe?.querySelectorAll(".mat-row").length ?? 0;
-      if (rowCount >= entry.materials.length) break;
+      if (rowCount >= targetCount) return;
       const add = recipe?.querySelector(".mat-add");
       if (!add) {
         throw new Error(
-          `GAO extension: add material button missing for ${entry.recipeId}.`,
+          `GAO extension: add material button missing for ${describeForgeRecipe(entry)}.`,
         );
       }
-      triggerClick(add);
-      await waitForUi();
+      triggerForgeClick(add);
+      await waitForForgeUi();
     }
     const finalRowCount =
-      findRecipe()?.querySelectorAll(".mat-row").length ?? 0;
-    if (finalRowCount < entry.materials.length) {
+      findForgeRecipeByHistoryEntry(entry)?.querySelectorAll(".mat-row")
+        .length ?? 0;
+    if (finalRowCount < targetCount) {
       throw new Error(
-        `GAO extension: failed to grow recipe ${entry.recipeId} to ${entry.materials.length} rows.`,
+        `GAO extension: failed to grow recipe ${describeForgeRecipe(entry)} to ${targetCount} rows.`,
       );
     }
+  }
 
-    for (const [rowIndex, material] of entry.materials.entries()) {
-      const row = findRecipe()?.querySelectorAll(".mat-row")[rowIndex];
-      const trigger = row?.querySelector(".ss__trigger");
-      if (!row || !trigger) {
-        throw new Error(`GAO extension: forge row ${rowIndex + 1} not found.`);
-      }
-      triggerClick(trigger);
-      await waitForUi();
-
-      const input = document.querySelector(".ss__search-input");
-      if (!input) {
-        throw new Error("GAO extension: material search input not found.");
-      }
-      setInputValue(input, material.name);
-      await waitForUi();
-
-      const option = [...document.querySelectorAll(".ss__list .ss__opt")].find(
-        (candidate) =>
-          candidate.textContent.replace(/剩餘\s*\d+.*$/, "").trim() ===
-          material.name,
+  async function restoreForgeRecipeMaterial(entry, rowIndex, material) {
+    const row =
+      findForgeRecipeByHistoryEntry(entry)?.querySelectorAll(".mat-row")[
+        rowIndex
+      ];
+    const trigger = row?.querySelector(".ss__trigger");
+    if (!row || !trigger) {
+      throw new Error(`GAO extension: forge row ${rowIndex + 1} not found.`);
+    }
+    triggerForgeClick(trigger);
+    await waitForForgeUi();
+    const input = document.querySelector(".ss__search-input");
+    if (!input) {
+      throw new Error("GAO extension: material search input not found.");
+    }
+    setInputValue(input, material.name);
+    await waitForForgeUi();
+    const option = [...document.querySelectorAll(".ss__list .ss__opt")].find(
+      (candidate) =>
+        candidate.textContent.replace(/剩餘\s*\d+.*$/, "").trim() ===
+        material.name,
+    );
+    if (!option) {
+      throw new Error(
+        `GAO extension: material option "${material.name}" not found.`,
       );
-      if (!option) {
+    }
+    triggerForgeClick(option);
+    await waitForForgeUi();
+    await setForgeRecipeMaterialQuantity(entry, rowIndex, material.quantity);
+  }
+
+  async function setForgeRecipeMaterialQuantity(entry, rowIndex, quantity) {
+    for (
+      let currentQuantity = 1;
+      currentQuantity < quantity;
+      currentQuantity += 1
+    ) {
+      const row =
+        findForgeRecipeByHistoryEntry(entry)?.querySelectorAll(".mat-row")[
+          rowIndex
+        ];
+      const plus = row?.querySelector(".mat-row__qty .qbtn:last-child");
+      if (!plus || plus.disabled) {
         throw new Error(
-          `GAO extension: material option "${material.name}" not found.`,
+          `GAO extension: insufficient stock for row ${rowIndex + 1}.`,
         );
       }
-      triggerClick(option);
-      await waitForUi();
-
-      for (let qty = 1; qty < material.qty; qty += 1) {
-        const activeRow = findRecipe()?.querySelectorAll(".mat-row")[rowIndex];
-        const plus = activeRow?.querySelector(".mat-row__qty .qbtn:last-child");
-        if (!plus || plus.disabled) {
-          throw new Error(
-            `GAO extension: insufficient stock for row ${rowIndex + 1}.`,
-          );
-        }
-        triggerClick(plus);
-        await waitForUi();
-      }
+      triggerForgeClick(plus);
+      await waitForForgeUi();
     }
+  }
+
+  function waitForForgeUi() {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => setTimeout(resolve, MAX_DELAY_MS));
+    });
+  }
+
+  function triggerForgeClick(element) {
+    if (!element) return;
+    const pointerSupported = typeof PointerEvent === "function";
+    const pointerInit = { bubbles: true, cancelable: true, pointerId: 1 };
+    const mouseInit = { bubbles: true, cancelable: true, buttons: 1 };
+    if (pointerSupported) {
+      element.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
+    }
+    element.dispatchEvent(new MouseEvent("mousedown", mouseInit));
+    if (pointerSupported) {
+      element.dispatchEvent(new PointerEvent("pointerup", pointerInit));
+    }
+    element.dispatchEvent(new MouseEvent("mouseup", mouseInit));
+    element.dispatchEvent(new MouseEvent("click", mouseInit));
+  }
+
+  function describeForgeRecipe(entry) {
+    return entry.recipeName || entry.weaponType || entry.recipeId || "這筆配方";
+  }
+
+  function normalizeNumericId(value) {
+    const normalized = Number(value);
+    if (!Number.isInteger(normalized) || normalized < 1) return null;
+    return normalized;
+  }
+
+  function normalizeForgeHistoryEntry(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const craftedId = normalizeNumericId(entry.craftedId);
+    if (!craftedId) return null;
+    const recipeName = String(
+      entry.recipeName || entry.weaponType || "",
+    ).trim();
+    return {
+      id: String(entry.id || `crafted-${craftedId}`),
+      craftedId,
+      atk: Number(entry.atk || 0),
+      def: Number(entry.def || 0),
+      luck: Number(entry.luck || 0),
+      weight: Number(entry.weight || 0),
+      durability: Number(entry.durability || 0),
+      createdAt: String(entry.createdAt || ""),
+      weaponName: String(entry.weaponName || ""),
+      recipeId: normalizeForgeRecipeId(entry.recipeId),
+      recipeName,
+      weaponType: String(entry.weaponType || recipeName || "").trim(),
+      name_rolls:
+        entry.name_rolls && typeof entry.name_rolls === "object"
+          ? entry.name_rolls
+          : {},
+      qualityName: String(entry.qualityName || ""),
+      materials: normalizeForgeMaterials(entry.materials),
+    };
+  }
+
+  function normalizeForgeMaterials(materials) {
+    if (!Array.isArray(materials)) return [];
+    return materials
+      .map((material) => {
+        const name = String(material?.name || "").trim();
+        const quantity = Number(material?.quantity ?? material?.qty ?? 0);
+        if (!name || quantity < 1) return null;
+        return { name, quantity };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeForgeRecipeId(value) {
+    if (value == null) return "";
+    return String(value).trim();
   }
 
   function readForgeHistory() {
     try {
       const raw = localStorage.getItem(FORGE_HISTORY_KEY);
       const parsed = JSON.parse(raw || "[]");
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map(normalizeForgeHistoryEntry).filter(Boolean);
     } catch (error) {
       console.error(error);
       return [];
@@ -642,21 +1150,21 @@
     }
   }
 
-  function findForgeNameInput() {
-    return document.querySelector(
-      'main.forge-main input[type="text"], main.forge-main input',
-    );
-  }
-
-  function formatForgeTime(value) {
-    return new Date(value).toLocaleString("zh-TW", {
-      hour12: false,
-    });
-  }
-
   function setForgeStatus(message, tone) {
     forgeStatus = message;
     forgeStatusTone = tone;
+  }
+
+  function readForgeRecipeId(recipe) {
+    return normalizeForgeRecipeId(
+      recipe?.querySelector(".recipe__id")?.textContent,
+    );
+  }
+
+  function readForgeRecipeName(recipe) {
+    return String(
+      recipe?.querySelector(".recipe__name")?.textContent || "",
+    ).trim();
   }
 
   function escapeHtml(value) {
@@ -667,149 +1175,274 @@
       .replaceAll('"', "&quot;");
   }
 
-  // 背包詳情切換時，嘗試從鍛造履歷推回這件成品的材料來源，
-  // 找到就動態插入一塊只讀的材料摘要。
-  function syncInventoryForgeMaterials() {
-    console.log("syncInventoryForgeMaterials");
+  // 背包詳情切換時，同步這件裝備的鍛造材料摘要與原始最大屬性。
+  function syncInventoryDetailEnhancements() {
     const detail = document.querySelector(".inv-right .detail-card");
     if (!detail) return;
-    const item = readInventoryCraftedItem(detail);
-    const entry = item ? findMatchingForgeEntry(item) : null;
-    renderInventoryForgeMaterials(detail, item, entry);
+    syncVisibleEquipmentItemIds();
+    const selected = document.querySelector(
+      INVENTORY_SELECTED_EQUIPMENT_CELL_SELECTOR,
+    );
+    const itemId = normalizeNumericId(selected?.dataset.gaoExtItemId);
+    if (selected && !itemId) {
+      warnOnce(
+        "inventory-selected-item-id",
+        "GAO extension: selected inventory item id missing.",
+      );
+    }
+    const equipment = itemId ? equipmentById.get(itemId) ?? null : null;
+    const entry = itemId
+      ? readForgeHistory().find((historyEntry) => historyEntry.craftedId === itemId) ??
+        null
+      : null;
+    renderInventoryBaseStatsInline(detail, itemId, equipment);
+    renderInventoryForgeMaterials(detail, itemId, entry);
   }
 
-  function readInventoryCraftedItem(detail) {
-    const rawName =
-      detail.querySelector(".detail__name")?.textContent.trim() || "";
-    const weaponName = rawName.replace(QUALITY_PREFIX_PATTERN, "").trim();
-    const typeKey = readInventoryTypeKey(detail);
-    const acquiredAtRange = readInventoryAcquiredAtRange(detail);
-    if (!weaponName || !typeKey) return null;
-    if (!acquiredAtRange) {
-      warnOnce(
-        "inventory-acquired-time",
-        "GAO extension: inventory acquired time not found.",
+  function syncVisibleEquipmentItemIds() {
+    const cells = [
+      ...document.querySelectorAll(INVENTORY_EQUIPMENT_CELL_SELECTOR),
+    ];
+    if (cells.length === 0) return;
+    const categoryButtons = [...document.querySelectorAll(".inv-left .cat")];
+    const activeCategoryIndex = categoryButtons.findIndex((button) =>
+      button.classList.contains("cat--active"),
+    );
+    const colorRow = [...document.querySelectorAll(".inv-center > div")].find(
+      (element) =>
+        String(element.textContent || "").includes(INVENTORY_COLOR_ROW_LABEL),
+    );
+    const colorButtons = colorRow
+      ? [...colorRow.querySelectorAll("button")].slice(1)
+      : [];
+    const activeColorIndex = colorButtons.findIndex((button) => {
+      const style = button?.getAttribute?.("style") || "";
+      return (
+        style.includes(INVENTORY_ACTIVE_COLOR_BORDER) &&
+        style.includes(INVENTORY_ACTIVE_COLOR_GLOW)
       );
+    });
+    const sortLabel = String(
+      document.querySelector(".inv-center .toolbar .seg__btn--active")
+        ?.textContent || "",
+    ).trim();
+    const uiState = {
+      categoryKey: INVENTORY_CATEGORY_KEYS[activeCategoryIndex] ?? null,
+      colorKey: INVENTORY_COLOR_OPTIONS[activeColorIndex]?.key ?? null,
+      searchText: String(
+        document.querySelector(".inv-center .toolbar input")?.value || "",
+      ).trim(),
+      sortKey: INVENTORY_SORT_KEY_BY_LABEL[sortLabel] || "quality",
+    };
+    const visibleIds =
+      uiState.categoryKey &&
+      uiState.categoryKey !== "all" &&
+      uiState.categoryKey !== "weapon"
+        ? []
+        : filterAndSortEquipmentItems(equipmentItems, uiState)
+            .map((item) => normalizeNumericId(item?.id ?? item?.item_id))
+            .filter(Boolean);
+    for (const [index, cell] of cells.entries()) {
+      const itemId = visibleIds[index];
+      if (itemId) {
+        cell.dataset.gaoExtItemId = String(itemId);
+        continue;
+      }
+      delete cell.dataset.gaoExtItemId;
+    }
+  }
+
+  function filterAndSortEquipmentItems(items, uiState) {
+    const searchText = uiState.searchText.toLowerCase();
+    return items
+      .filter((item) => !uiState.colorKey || item?.color_tag === uiState.colorKey)
+      .filter((item) => {
+        if (!searchText) return true;
+        return String(item?.weapon_name ?? item?.name ?? "")
+          .toLowerCase()
+          .includes(searchText);
+      })
+      .slice()
+      .sort((left, right) =>
+        compareEquipmentItems(left, right, uiState.sortKey),
+      );
+  }
+
+  function compareEquipmentItems(left, right, sortKey) {
+    switch (sortKey) {
+      case "quality":
+        return (
+          (right?.name_rolls?.quality ?? -1) - (left?.name_rolls?.quality ?? -1)
+        );
+      case "time":
+        return (
+          new Date(right?.created_at ?? 0).getTime() -
+          new Date(left?.created_at ?? 0).getTime()
+        );
+      case "type":
+        return String(left?.name ?? "").localeCompare(
+          String(right?.name ?? ""),
+        );
+      case "atk":
+        return Number(right?.atk || 0) - Number(left?.atk || 0);
+      case "def":
+        return Number(right?.def || 0) - Number(left?.def || 0);
+      case "luck":
+        return Number(right?.luck || 0) - Number(left?.luck || 0);
+      case "weight":
+        return Number(right?.weight || 0) - Number(left?.weight || 0);
+      case "dur":
+        return Number(right?.durability || 0) - Number(left?.durability || 0);
+      default:
+        return 0;
+    }
+  }
+
+  function renderInventoryBaseStatsInline(detail, itemId, equipment) {
+    const signature =
+      itemId && equipment
+        ? [
+            itemId,
+            equipment?.name_rolls?.[EQUIPMENT_QUALITY_ROLL_KEY] ?? "",
+            ...INVENTORY_BASE_STAT_FIELDS.flatMap((field) => [
+              equipment?.[field.key] ?? "",
+              equipment?.name_rolls?.[field.rollKey] ?? "",
+            ]),
+          ].join("|")
+        : "none";
+    if (
+      detail.dataset.gaoExtBaseStats === signature &&
+      hasRenderedInventoryBaseStats(detail, equipment)
+    ) {
+      return;
+    }
+    detail.dataset.gaoExtBaseStats = signature;
+    for (const element of detail.querySelectorAll(
+      `[${ATTR}="inventory-base-stat-inline"]`,
+    )) {
+      element.remove();
+    }
+    if (!equipment) return;
+    const qualityRoll = readPositiveRoll(
+      equipment?.name_rolls?.[EQUIPMENT_QUALITY_ROLL_KEY],
+    );
+    const valueByLabel = new Map(
+      INVENTORY_BASE_STAT_FIELDS.map((field) =>
+        buildInventoryBaseStatRow({ equipment, field, qualityRoll }),
+      ).map((stat) => [stat.statLabel, stat]),
+    );
+    for (const row of detail.querySelectorAll(".stats-grid .sg-row")) {
+      const label = String(
+        row.querySelector(".sg-row__l")?.textContent || "",
+      ).trim();
+      const stat = valueByLabel.get(label);
+      const valueNode = row.querySelector(".sg-row__v");
+      if (!stat || !valueNode) continue;
+      const element = document.createElement("span");
+      element.className = "gao-ext-inline-stat";
+      element.setAttribute(ATTR, "inventory-base-stat-inline");
+      if (stat.error) {
+        element.dataset.state = "error";
+      }
+      element.textContent = stat.error
+        ? `(${stat.error})`
+        : `(${String(stat.value)})`;
+      valueNode.append(element);
+    }
+  }
+
+  function calculateBaseStatValue({
+    currentValue,
+    nameRoll,
+    quality,
+    statLabel,
+  }) {
+    if (statLabel === "WT") {
+      return Math.floor((currentValue * nameRoll) / quality.weightMult);
+    }
+
+    return Math.floor(currentValue / nameRoll / quality.qualityMult);
+  }
+
+  function getQualityByRoll(qualityRoll) {
+    const roll = Number(qualityRoll);
+
+    if (!Number.isFinite(roll)) {
       return null;
     }
-    return { weaponName, typeKey, acquiredAtRange };
-  }
 
-  // 從履歷中挑出最可能對應這件背包成品的一筆紀錄，
-  // 比對條件包含名稱、武器類型與取得時間附近的窗口。
-  function findMatchingForgeEntry(item) {
-    // 背包看不到 recipe id，只能用名稱正規化、武器類型，
-    // 再加上取得時間窗口去推回最可能的鍛造紀錄。
     return (
-      readForgeHistory()
-        .filter((entry) => entry.weaponType && entry.weaponTypeKey)
-        .filter(
-          (entry) =>
-            normalizeInventoryMatchText(entry.weaponName) ===
-              normalizeInventoryMatchText(item.weaponName) &&
-            entry.weaponTypeKey === item.typeKey &&
-            isForgeEntryWithinInventoryTimeWindow(entry, item.acquiredAtRange),
-        )
-        .sort((left, right) =>
-          right.createdAt.localeCompare(left.createdAt),
-        )[0] ?? null
+      qualityTable.find((row) => roll > row.min && roll <= row.max) ?? null
     );
   }
 
-  function renderInventoryForgeMaterials(detail, item, entry) {
-    console.log("renderInventoryForgeMaterials", { item, entry });
-    const signature =
-      item && entry ? buildInventoryForgeSignature(item, entry) : "none";
+  function buildInventoryBaseStatRow(options) {
+    const { equipment, field, qualityRoll } = options;
+
+    const currentValue = Number(equipment?.[field.key]);
+    const nameRoll = readPositiveRoll(equipment?.name_rolls?.[field.rollKey]);
+    const quality = getQualityByRoll(qualityRoll);
+
+    if (!Number.isFinite(currentValue) || !quality || !nameRoll) {
+      return {
+        statLabel: field.statLabel,
+        error: "N/A",
+        value: null,
+      };
+    }
+
+    return {
+      statLabel: field.statLabel,
+      error: "",
+      value: calculateBaseStatValue({
+        currentValue,
+        nameRoll,
+        quality,
+        statLabel: field.statLabel,
+      }),
+    };
+  }
+
+  function hasRenderedInventoryBaseStats(detail, equipment) {
+    if (!equipment) {
+      return (
+        detail.querySelectorAll(`[${ATTR}="inventory-base-stat-inline"]`)
+          .length === 0
+      );
+    }
+    return (
+      detail.querySelectorAll(`[${ATTR}="inventory-base-stat-inline"]`)
+        .length === INVENTORY_BASE_STAT_FIELDS.length
+    );
+  }
+
+  function readPositiveRoll(value) {
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized) || normalized <= 0) return null;
+    return normalized;
+  }
+
+  function renderInventoryForgeMaterials(detail, itemId, entry) {
+    const signature = itemId && entry ? `${itemId}|${entry.id}` : "none";
     if (detail.dataset.gaoExtForgeMaterials === signature) return;
     detail.dataset.gaoExtForgeMaterials = signature;
     detail.querySelector(`[${ATTR}="inventory-materials"]`)?.remove();
     if (!entry) return;
+    const materials = escapeHtml(
+      entry.materials
+        .map((material) => `${material.name}×${material.quantity}`)
+        .join(", "),
+    );
     const block = document.createElement("div");
     block.className = "gao-ext-material-block";
     block.setAttribute(ATTR, "inventory-materials");
-    const materials = escapeHtml(
-      entry.materials
-        .map((material) => `${material.name}×${material.qty}`)
-        .join(", "),
-    );
     block.innerHTML = `
-      <div class="gao-ext-material-title">使用材料 / FORGE MATERIALS</div>
-      <div class="gao-ext-material-meta">${escapeHtml(
-        `${entry.weaponType} · ${formatForgeTime(entry.createdAt)}`,
-      )}</div>
+      <div class="gao-ext-material-title">${escapeHtml("使用材料 / FORGE MATERIALS")}</div>
+      <div class="gao-ext-material-meta">${escapeHtml(buildForgeHistoryMeta(entry))}</div>
       <div class="gao-ext-material-list">${materials}</div>
     `;
     const anchor = detail.querySelector(".actions") ?? detail.lastElementChild;
     anchor?.insertAdjacentElement("beforebegin", block);
-  }
-
-  function buildInventoryForgeSignature(item, entry) {
-    return `${item.weaponName}|${item.typeKey}|${item.acquiredAtRange.startMs}|${entry.id}`;
-  }
-
-  function readInventoryTypeKey(detail) {
-    const style =
-      detail
-        .querySelector(".preview-cell span, .preview-cell")
-        ?.getAttribute("style") || "";
-    const iconMatch = style.match(/\/icons\/([a-z-]+)\.svg/i);
-    if (iconMatch?.[1]) return iconMatch[1].toLowerCase();
-    const flavor = detail.querySelector(".flavor")?.textContent.trim() || "";
-    for (const [candidate, pattern] of FLAVOR_TYPE_PATTERNS) {
-      if (pattern.test(flavor)) return candidate;
-    }
-    return "";
-  }
-
-  function readInventoryAcquiredAtRange(detail) {
-    const timeText = readInventoryAcquiredTimeText(detail);
-    if (!timeText) return null;
-    const match = timeText.match(INVENTORY_ACQUIRED_AT_PATTERN);
-    if (!match) return null;
-    const startMs = new Date(
-      Number(match[1]),
-      Number(match[2]) - 1,
-      Number(match[3]),
-      Number(match[4]),
-      Number(match[5]),
-      0,
-      0,
-    ).getTime();
-    if (Number.isNaN(startMs)) return null;
-    return {
-      startMs,
-      endMs: startMs + FORGE_MATCH_WINDOW_MS - 1,
-    };
-  }
-
-  function readInventoryAcquiredTimeText(detail) {
-    let element = detail.querySelector(".actions");
-    while (element?.previousElementSibling) {
-      element = element.previousElementSibling;
-      const text = element.textContent.replace(/\s+/g, " ").trim();
-      if (INVENTORY_ACQUIRED_AT_PATTERN.test(text)) return text;
-    }
-    for (const child of detail.children) {
-      const text = child.textContent.replace(/\s+/g, " ").trim();
-      if (INVENTORY_ACQUIRED_AT_PATTERN.test(text)) return text;
-    }
-    return "";
-  }
-
-  function normalizeInventoryMatchText(value) {
-    return value.toLowerCase().replace(/\s+/g, "");
-  }
-
-  function isForgeEntryWithinInventoryTimeWindow(entry, acquiredAtRange) {
-    const createdAtMs = Date.parse(entry.createdAt);
-    if (Number.isNaN(createdAtMs)) return false;
-    if (createdAtMs < acquiredAtRange.startMs) {
-      return acquiredAtRange.startMs - createdAtMs < FORGE_MATCH_WINDOW_MS;
-    }
-    if (createdAtMs > acquiredAtRange.endMs) {
-      return createdAtMs - acquiredAtRange.endMs < FORGE_MATCH_WINDOW_MS;
-    }
-    return true;
   }
 
   // 把原始戰報拆成「掉落物」與「戰報」兩個可折疊區塊，
@@ -915,7 +1548,6 @@
   }
 
   function enhanceMarketBuyMax() {
-    console.log("enhanceMarketBuyMax");
     const detail = document.querySelector(".detail");
     if (!detail || detail.querySelector(`[${ATTR}="max-buy"]`)) return;
     const max = Number(
@@ -939,7 +1571,6 @@
   }
 
   function enhanceMarketBoardRefresh() {
-    console.log("enhanceMarketBoardRefresh");
     const chips = document.querySelector(".chips");
     if (!chips || chips.querySelector(`[${ATTR}="organize-market"]`)) return;
     const button = document.createElement("button");
