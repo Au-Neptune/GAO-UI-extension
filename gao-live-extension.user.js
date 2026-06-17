@@ -30,6 +30,7 @@
     subtree: true,
     characterData: true,
     attributes: true,
+    attributeFilter: ["class", "style"],
   };
   const INVENTORY_CATEGORY_KEYS = [
     "all",
@@ -357,18 +358,25 @@
     const originalFetch = window.fetch;
     window.fetch = async function gaoExtFetch(...args) {
       const [requestInfo, requestInit] = args;
-      const url = typeof requestInfo === "string"
-        ? requestInfo
-        : requestInfo instanceof URL
-          ? requestInfo.toString()
-          : requestInfo?.url
-            ? String(requestInfo.url)
-            : "";
+      const url =
+        typeof requestInfo === "string"
+          ? requestInfo
+          : requestInfo instanceof URL
+            ? requestInfo.toString()
+            : requestInfo?.url
+              ? String(requestInfo.url)
+              : "";
       const flags = {
         isCraftRequest: requestPathMatches(url, /\/craft\/?$/i),
         isRecipesRequest: requestPathMatches(url, /\/recipes\/?$/i),
-        isInventoryItemsRequest: requestPathMatches(url, /\/api\/inventory\/?$/i),
-        isEquipmentRequest: requestPathMatches(url, /\/api\/forge\/equipment\/?$/i),
+        isInventoryItemsRequest: requestPathMatches(
+          url,
+          /\/api\/inventory\/?$/i,
+        ),
+        isEquipmentRequest: requestPathMatches(
+          url,
+          /\/api\/forge\/equipment\/?$/i,
+        ),
       };
       let pendingRequestId = "";
       if (flags.isCraftRequest) {
@@ -395,11 +403,6 @@
           pendingCraftRequests.splice(index, 1);
         }
       }
-      console.log(
-        "GAO extension: inspecting fetch response for",
-        url,
-        response,
-      );
       await handleHookedFetchResponse(url, response, flags);
       return response;
     };
@@ -707,7 +710,8 @@
     let request = null;
     for (let index = pendingCraftRequests.length - 1; index >= 0; index -= 1) {
       const pendingRequest = pendingCraftRequests[index];
-      if (craftedItemId && pendingRequest.resultItemId !== craftedItemId) continue;
+      if (craftedItemId && pendingRequest.resultItemId !== craftedItemId)
+        continue;
       if (weaponName && pendingRequest.weaponName !== weaponName) continue;
       request = pendingCraftRequests.splice(index, 1)[0];
       break;
@@ -1190,10 +1194,11 @@
         "GAO extension: selected inventory item id missing.",
       );
     }
-    const equipment = itemId ? equipmentById.get(itemId) ?? null : null;
+    const equipment = itemId ? (equipmentById.get(itemId) ?? null) : null;
     const entry = itemId
-      ? readForgeHistory().find((historyEntry) => historyEntry.craftedId === itemId) ??
-        null
+      ? (readForgeHistory().find(
+          (historyEntry) => historyEntry.craftedId === itemId,
+        ) ?? null)
       : null;
     renderInventoryBaseStatsInline(detail, itemId, equipment);
     renderInventoryForgeMaterials(detail, itemId, entry);
@@ -1245,17 +1250,24 @@
     for (const [index, cell] of cells.entries()) {
       const itemId = visibleIds[index];
       if (itemId) {
-        cell.dataset.gaoExtItemId = String(itemId);
+        const nextValue = String(itemId);
+        if (cell.dataset.gaoExtItemId !== nextValue) {
+          cell.dataset.gaoExtItemId = nextValue;
+        }
         continue;
       }
-      delete cell.dataset.gaoExtItemId;
+      if (cell.dataset.gaoExtItemId) {
+        delete cell.dataset.gaoExtItemId;
+      }
     }
   }
 
   function filterAndSortEquipmentItems(items, uiState) {
     const searchText = uiState.searchText.toLowerCase();
     return items
-      .filter((item) => !uiState.colorKey || item?.color_tag === uiState.colorKey)
+      .filter(
+        (item) => !uiState.colorKey || item?.color_tag === uiState.colorKey,
+      )
       .filter((item) => {
         if (!searchText) return true;
         return String(item?.weapon_name ?? item?.name ?? "")
