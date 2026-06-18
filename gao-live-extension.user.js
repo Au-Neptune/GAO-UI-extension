@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.10
+// @version      0.2.11
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -238,6 +238,9 @@
         enhanceMarketBuyMax();
         enhanceMarketBoardRefresh();
       });
+    }
+    if (path === "/town") {
+      return mountMainObservedPage(syncTownMineMpEstimate);
     }
     if (path.startsWith("/records/")) {
       return mountMainObservedPage(enhanceBattleReport);
@@ -653,6 +656,9 @@
       .gao-ext-history-delete { font-size: var(--fs-sm); border: 1px solid var(--border-strong); padding: 8px 10px; cursor: pointer; }
       .gao-ext-history-replay[disabled] { opacity: 0.6; cursor: wait; }
       .gao-ext-history-delete[disabled] { opacity: 0.6; cursor: wait; }
+      .gao-ext-mine-estimate { color: var(--text-secondary); }
+      .gao-ext-mine-estimate-value { color: var(--lime-300); }
+      .gao-ext-mine-estimate[data-state="error"] .gao-ext-mine-estimate-value { color: var(--text-muted); }
       .gao-ext-material-block { margin-top: var(--s-4); border-top: 1px solid var(--border-soft); padding-top: var(--s-4); padding-bottom: var(--s-4); display: flex; flex-direction: column; gap: var(--s-2); }
       .gao-ext-material-title { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.08em; }
       .gao-ext-material-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
@@ -728,6 +734,17 @@
       );
     } catch (error) {
       console.error("GAO extension: /me snapshot save failed.", error);
+    }
+  }
+
+  function readMeSnapshot() {
+    try {
+      const raw = localStorage.getItem(ME_SNAPSHOT_KEY);
+      const parsed = JSON.parse(raw || "null");
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (error) {
+      console.error("GAO extension: /me snapshot read failed.", error);
+      return null;
     }
   }
 
@@ -1202,6 +1219,94 @@
       console.error(error);
       setForgeStatus("鍛造履歷儲存失敗，請查看 console 錯誤。", "error");
     }
+  }
+
+  function syncTownMineMpEstimate() {
+    const current = document.querySelector(`[${ATTR}="town-mine-mp-estimate"]`);
+    const stats = document.querySelector(".mine-stats");
+    if (!stats) {
+      current?.remove();
+      return;
+    }
+    const elapsedSeconds = readTownMineElapsedSeconds();
+    const character = readMeSnapshot()?.character;
+    const hasCharacter = character && typeof character === "object";
+    const efficiency = Number(character?.talents?.efficiency ?? 0);
+    const characterMP = Number(character?.mp ?? 0);
+    const defaultMpCost = Math.floor(
+      elapsedSeconds / 60 / (3 / (1 + 0.02 * efficiency)),
+    );
+    const mpCost =
+      hasCharacter && elapsedSeconds != null
+        ? Math.floor(Math.min(defaultMpCost, characterMP))
+        : null;
+    const signature = `${elapsedSeconds ?? "na"}|${hasCharacter ? efficiency : "no-character"}|${mpCost ?? "na"}`;
+    const estimate = current || document.createElement("span");
+    if (estimate.dataset.gaoExtSignature === signature) return;
+    estimate.dataset.gaoExtSignature = signature;
+    estimate.className = "gao-ext-mine-estimate";
+    estimate.setAttribute(ATTR, "town-mine-mp-estimate");
+    if (!hasCharacter || elapsedSeconds == null) {
+      estimate.dataset.state = "error";
+    } else {
+      delete estimate.dataset.state;
+    }
+    estimate.innerHTML = ` · expected_mp = <span class="gao-ext-mine-estimate-value">${escapeHtml(mpCost == null ? "N/A" : String(mpCost))}</span> ${escapeHtml("(重整刷新)")}`;
+    if (!current) {
+      stats.append(estimate);
+    }
+  }
+
+  function readTownMineElapsedSeconds() {
+    if (!document.querySelector(".mine-active")) return 0;
+    const elapsedValue = [...document.querySelectorAll(".mine-info__row")]
+      .find((row) =>
+        String(row.querySelector(".mine-info__lab")?.textContent || "")
+          .trim()
+          .toLowerCase()
+          .includes("elapsed"),
+      )
+      ?.querySelector(".mine-info__val")?.textContent;
+    return (
+      parseMineDurationSeconds(elapsedValue) ??
+      parseMineDurationSeconds(
+        document.querySelector(".mine-gauge__time")?.textContent,
+      )
+    );
+  }
+
+  function parseMineDurationSeconds(value) {
+    const text = String(value || "").trim();
+    if (!text) return null;
+    const colonParts = text
+      .split(":")
+      .map((part) => Number(part.trim()))
+      .filter((part) => Number.isFinite(part));
+    if (colonParts.length === 2) {
+      return colonParts[0] * 60 + colonParts[1];
+    }
+    if (colonParts.length === 3) {
+      return colonParts[0] * 3600 + colonParts[1] * 60 + colonParts[2];
+    }
+    const hours = Number(text.match(/(\d+)\s*(?:h|hr|hour|hours|小時)/i)?.[1]);
+    const minutes = Number(
+      text.match(/(\d+)\s*(?:m|min|mins|minute|minutes|分鐘|分)/i)?.[1],
+    );
+    const seconds = Number(
+      text.match(/(\d+)\s*(?:s|sec|secs|second|seconds|秒)/i)?.[1],
+    );
+    if (
+      !Number.isFinite(hours) &&
+      !Number.isFinite(minutes) &&
+      !Number.isFinite(seconds)
+    ) {
+      return null;
+    }
+    return (
+      (Number.isFinite(hours) ? hours : 0) * 3600 +
+      (Number.isFinite(minutes) ? minutes : 0) * 60 +
+      (Number.isFinite(seconds) ? seconds : 0)
+    );
   }
 
   function setForgeStatus(message, tone) {
