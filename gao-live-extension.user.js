@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.9
+// @version      0.2.10
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -18,6 +18,7 @@
   const MAX_FORGE_ROWS = 48;
   const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
   const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
+  const ME_SNAPSHOT_KEY = "gao-ext-me-snapshot-v1";
   const FORGE_HISTORY_LIMIT = 24;
   const PENDING_CRAFT_REQUEST_WINDOW_MS = 2 * 60 * 1000;
   const PENDING_FORGE_REPLAY_CONTEXT_WINDOW_MS = 10 * 1000;
@@ -368,6 +369,7 @@
               : "";
       const flags = {
         isCraftRequest: requestPathMatches(url, /\/craft\/?$/i),
+        isMeRequest: requestPathMatches(url, /\/me\/?$/i),
         isRecipesRequest: requestPathMatches(url, /\/recipes\/?$/i),
         isInventoryItemsRequest: requestPathMatches(
           url,
@@ -421,6 +423,7 @@
     if (
       !response?.ok ||
       (!flags.isCraftRequest &&
+        !flags.isMeRequest &&
         !flags.isRecipesRequest &&
         !flags.isInventoryItemsRequest &&
         !flags.isEquipmentRequest)
@@ -430,6 +433,10 @@
     try {
       const payload = parseJsonText(await response.clone().text());
       if (!payload) return;
+      if (flags.isMeRequest) {
+        writeMeSnapshot(payload);
+        return;
+      }
       if (flags.isRecipesRequest) {
         mergeForgeMaterialMapFromInventory(payload?.inventory);
         return;
@@ -706,6 +713,22 @@
       normalizedEntries.push([String(normalizedId), normalizedName]);
     }
     return Object.fromEntries(normalizedEntries);
+  }
+
+  function writeMeSnapshot(payload) {
+    if (!payload || typeof payload !== "object") return;
+    if (!payload.character || typeof payload.character !== "object") {
+      console.error("GAO extension: /me payload has no character.", payload);
+      return;
+    }
+    try {
+      localStorage.setItem(
+        ME_SNAPSHOT_KEY,
+        JSON.stringify({ character: payload.character }),
+      );
+    } catch (error) {
+      console.error("GAO extension: /me snapshot save failed.", error);
+    }
   }
 
   function handleCraftResponse(payload) {
