@@ -629,12 +629,19 @@
       .gao-ext-history-name { font-weight: 700; color: var(--text-primary); }
       .gao-ext-history-meta,
       .gao-ext-history-materials,
+      .gao-ext-history-footer,
       .gao-ext-history-empty,
       .gao-ext-history-status { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary); }
       .gao-ext-history-status[data-tone="error"] { color: var(--danger-300, #ff8a8a); }
       .gao-ext-history-status[data-tone="success"] { color: var(--lime-300); }
       .gao-ext-history-actions { display: flex; gap: var(--s-2); align-items: flex-start; margin-top: var(--s-2); flex-wrap: wrap; }
-      .gao-ext-history-materials { flex: 1 1 220px; min-width: 0; }
+      .gao-ext-history-materials { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+      .gao-ext-history-buttons { display: flex; gap: var(--s-2); align-items: flex-start; justify-content: flex-end; margin-left: auto; flex-wrap: wrap; }
+      .gao-ext-history-footer { margin-top: var(--s-1); display: flex; gap: 4px; align-items: center; flex-wrap: wrap; color: var(--text-secondary); word-break: break-word; }
+      .gao-ext-history-stat[data-roll-tone="muted"] { color: var(--text-muted); }
+      .gao-ext-history-stat[data-roll-tone="cyan"] { color: var(--cyan-200); }
+      .gao-ext-history-stat[data-roll-tone="gold"] { color: var(--gold-400); }
+      .gao-ext-history-separator { color: var(--text-tertiary); }
       .gao-ext-history-replay { font-size: var(--fs-sm); border: 1px solid var(--border-strong); padding: 8px 10px; cursor: pointer; }
       .gao-ext-history-delete { font-size: var(--fs-sm); border: 1px solid var(--border-strong); padding: 8px 10px; cursor: pointer; }
       .gao-ext-history-replay[disabled] { opacity: 0.6; cursor: wait; }
@@ -739,7 +746,6 @@
       weaponName: String(crafted?.weapon_name || ""),
       recipeId: normalizeForgeRecipeId(request.recipeId),
       recipeName,
-      weaponType: recipeName,
       name_rolls:
         crafted?.name_rolls && typeof crafted.name_rolls === "object"
           ? crafted.name_rolls
@@ -841,6 +847,7 @@
           .map((material) => `${material.name}×${material.quantity}`)
           .join(", "),
       );
+      const footer = buildForgeHistoryFooterMarkup(entry);
       item.innerHTML = `
         <div class="gao-ext-history-head">
           <strong class="gao-ext-history-name">${name}</strong>
@@ -848,21 +855,24 @@
         </div>
         <div class="gao-ext-history-actions">
           <div class="gao-ext-history-materials">${materials}</div>
-          <button
-            type="button"
-            class="chip gao-ext-organize gao-ext-history-replay"
-            data-gao-ext-action="replay-forge"
-            data-entry-id="${entry.id}"
-            ${disabled}
-          >再鍛一次</button>
-          <button
-            type="button"
-            class="chip gao-ext-history-delete"
-            data-gao-ext-action="delete-forge-history"
-            data-entry-id="${entry.id}"
-            ${disabled}
-          >移除</button>
+          <div class="gao-ext-history-buttons">
+            <button
+              type="button"
+              class="chip gao-ext-history-replay"
+              data-gao-ext-action="replay-forge"
+              data-entry-id="${entry.id}"
+              ${disabled}
+            >再鍛一次</button>
+            <button
+              type="button"
+              class="chip gao-ext-history-delete"
+              data-gao-ext-action="delete-forge-history"
+              data-entry-id="${entry.id}"
+              ${disabled}
+            >移除</button>
+          </div>
         </div>
+        <div class="gao-ext-history-footer">${footer}</div>
       `;
       list.appendChild(item);
     }
@@ -870,13 +880,35 @@
     return nodes;
   }
 
+  function buildForgeHistoryFooterMarkup(entry) {
+    const rollCyanMin = 0.5;
+    const rollGoldMin = 0.9;
+    const formatValue = (value) => {
+      const normalized = Number(value);
+      if (!Number.isFinite(normalized)) return "N/A";
+      return String(normalized);
+    };
+    const getRollTone = (value) => {
+      const roll = Number(value);
+      if (!Number.isFinite(roll) || roll < rollCyanMin) return "muted";
+      if (roll < rollGoldMin) return "cyan";
+      return "gold";
+    };
+    return INVENTORY_BASE_STAT_FIELDS.map((field) => {
+      const statValue = escapeHtml(formatValue(entry?.[field.key]));
+      const rollValue = escapeHtml(
+        formatValue(entry?.name_rolls?.[field.rollKey]),
+      );
+      const tone = getRollTone(entry?.name_rolls?.[field.rollKey]);
+      return `<span class="gao-ext-history-stat" data-roll-tone="${tone}">${field.statLabel} ${statValue}(${rollValue})</span>`;
+    }).join('<span class="gao-ext-history-separator">/</span>');
+  }
+
   function buildForgeHistoryMeta(entry) {
     const parts = [];
     if (entry.craftedId) parts.push(`#${entry.craftedId}`);
     if (entry.qualityName) parts.push(entry.qualityName);
-    if (entry.recipeName || entry.weaponType) {
-      parts.push(entry.recipeName || entry.weaponType);
-    }
+    if (entry.recipeName) parts.push(entry.recipeName);
     if (entry.createdAt) {
       parts.push(
         new Date(entry.createdAt).toLocaleString("zh-TW", {
@@ -943,9 +975,7 @@
 
   function findForgeRecipeByHistoryEntry(entry) {
     const expectedRecipeId = normalizeForgeRecipeId(entry.recipeId);
-    const expectedRecipeName = String(
-      entry.recipeName || entry.weaponType || "",
-    ).trim();
+    const expectedRecipeName = String(entry.recipeName || "").trim();
     return (
       [...document.querySelectorAll(".recipe")].find((recipe) => {
         if (
@@ -1078,7 +1108,7 @@
   }
 
   function describeForgeRecipe(entry) {
-    return entry.recipeName || entry.weaponType || entry.recipeId || "這筆配方";
+    return entry.recipeName || entry.recipeId || "這筆配方";
   }
 
   function normalizeNumericId(value) {
@@ -1091,9 +1121,7 @@
     if (!entry || typeof entry !== "object") return null;
     const craftedId = normalizeNumericId(entry.craftedId);
     if (!craftedId) return null;
-    const recipeName = String(
-      entry.recipeName || entry.weaponType || "",
-    ).trim();
+    const recipeName = String(entry.recipeName || "").trim();
     return {
       id: String(entry.id || `crafted-${craftedId}`),
       craftedId,
@@ -1106,7 +1134,6 @@
       weaponName: String(entry.weaponName || ""),
       recipeId: normalizeForgeRecipeId(entry.recipeId),
       recipeName,
-      weaponType: String(entry.weaponType || recipeName || "").trim(),
       name_rolls:
         entry.name_rolls && typeof entry.name_rolls === "object"
           ? entry.name_rolls
