@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.12
+// @version      0.2.13
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -1617,7 +1617,6 @@
   // 同時復用 details/panel 外殼，避免連續戰鬥時重建整組 DOM。
   function enhanceBattleReport() {
     for (const inner of document.querySelectorAll(".bl__inner")) {
-      console.log("Processing battle report inner:", inner);
       const children = [...inner.children];
       const pre = children.find((child) => child.classList.contains("bl-pre"));
       const head = children.find((child) =>
@@ -1632,7 +1631,7 @@
       }
 
       const lineRows = logs.flatMap((log) => [
-        ...log.querySelectorAll(".bl-row[data-line]"),
+        ...log.querySelectorAll(":scope > .bl-row[data-line]"),
       ]);
       const signature = [
         lineRows.length,
@@ -1642,15 +1641,16 @@
       ].join("|");
       if (inner.dataset.gaoExtBattle === signature) continue;
 
-      const actRows = logs.flatMap((log) => [
-        ...log.querySelectorAll(".bl-row[data-act]"),
-      ]);
+      const logNodes = logs.flatMap((log) => [...log.children]);
+      const lineRowSet = new Set(lineRows);
       const dropRows = [];
       const reportRows = [];
 
-      for (const row of actRows) {
-        const targetRows = row.dataset.act === "reward" ? dropRows : reportRows;
-        targetRows.push(row);
+      for (const node of logNodes) {
+        if (lineRowSet.has(node)) continue;
+        const targetRows =
+          node.dataset.act === "reward" ? dropRows : reportRows;
+        targetRows.push(node);
       }
 
       for (const row of lineRows) {
