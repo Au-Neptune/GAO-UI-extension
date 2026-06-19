@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.11
+// @version      0.2.12
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -16,6 +16,7 @@
   const RESTORE_PATTERN = /(HP|MP|生命|魔力)/i;
   const MAX_DELAY_MS = 80;
   const MAX_FORGE_ROWS = 48;
+  const BATTLE_SIGNATURE_LINE_COUNT = 2;
   const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
   const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
   const ME_SNAPSHOT_KEY = "gao-ext-me-snapshot-v1";
@@ -1613,49 +1614,10 @@
   }
 
   // 把原始戰報拆成「掉落物」與「戰報」兩個可折疊區塊，
-  // 同時保留原始內容來源，避免重跑時越拆越亂。
+  // 同時復用 details/panel 外殼，避免連續戰鬥時重建整組 DOM。
   function enhanceBattleReport() {
-    const buildDetails = (title, meta) => {
-      const details = document.createElement("details");
-      details.className = "gao-ext-details";
-      const summary = document.createElement("summary");
-      summary.textContent = `${title} / ${meta}`;
-      const panel = document.createElement("div");
-      panel.className = "gao-ext-panel";
-      details.append(summary, panel);
-      return details;
-    };
-    const cloneReportNode = (element) => {
-      const clone = element.cloneNode(true);
-      clone.classList.remove(HIDDEN);
-      clone.removeAttribute(ATTR);
-      clone
-        .querySelectorAll(`[${ATTR}]`)
-        .forEach((child) => child.removeAttribute(ATTR));
-      clone
-        .querySelectorAll(`.${HIDDEN}`)
-        .forEach((child) => child.classList.remove(HIDDEN));
-      return clone;
-    };
-
     for (const inner of document.querySelectorAll(".bl__inner")) {
-      // MutationObserver 會重複進來，先用目前內容做簽章，
-      // 沒變動就跳過，避免一直拆裝同一份戰報 DOM。
-      const signature = [...inner.children]
-        .filter((child) => !child.matches(`details[${ATTR}]`))
-        .map((child) => child.textContent.trim())
-        .join("|");
-      if (inner.dataset.gaoExtBattle === signature) continue;
-
-      for (const detail of inner.querySelectorAll(
-        `:scope > details[${ATTR}]`,
-      )) {
-        detail.remove();
-      }
-      for (const element of inner.querySelectorAll(`:scope > .${HIDDEN}`)) {
-        element.classList.remove(HIDDEN);
-      }
-
+      console.log("Processing battle report inner:", inner);
       const children = [...inner.children];
       const pre = children.find((child) => child.classList.contains("bl-pre"));
       const head = children.find((child) =>
@@ -1669,49 +1631,95 @@
         continue;
       }
 
-      inner.dataset.gaoExtBattle = signature;
-      const anchor = head || logs[0];
-      const rewards = logs.flatMap((log) => [
-        ...log.querySelectorAll(
-          '.bl-row[data-act="reward"], .bl-row[data-line="reward"]',
-        ),
+      const lineRows = logs.flatMap((log) => [
+        ...log.querySelectorAll(".bl-row[data-line]"),
       ]);
-      if (rewards.length > 0) {
-        const drops = buildDetails("掉落物 · DROPS", `${rewards.length} lines`);
-        drops.setAttribute(ATTR, "drops");
-        const dropLog = document.createElement("div");
-        dropLog.className = "bl-log";
-        dropLog.append(...rewards.map(cloneReportNode));
-        drops.querySelector(".gao-ext-panel").appendChild(dropLog);
-        inner.insertBefore(drops, anchor);
+      const signature = [
+        lineRows.length,
+        ...lineRows
+          .slice(-BATTLE_SIGNATURE_LINE_COUNT)
+          .map((row) => `${row.dataset.line}:${row.textContent.trim()}`),
+      ].join("|");
+      if (inner.dataset.gaoExtBattle === signature) continue;
+
+      const actRows = logs.flatMap((log) => [
+        ...log.querySelectorAll(".bl-row[data-act]"),
+      ]);
+      const dropRows = [];
+      const reportRows = [];
+
+      for (const row of actRows) {
+        const targetRows = row.dataset.act === "reward" ? dropRows : reportRows;
+        targetRows.push(row);
       }
 
-      const eventCount = logs.reduce((sum, log) => {
-        return (
-          sum +
-          log.querySelectorAll(
-            '.bl-row:not([data-act="reward"], [data-line="reward"])',
-          ).length
-        );
-      }, 0);
-      const report = buildDetails("戰報 · BATTLE LOG", `${eventCount} events`);
-      report.setAttribute(ATTR, "report");
-      const panel = report.querySelector(".gao-ext-panel");
-      if (head) panel.appendChild(cloneReportNode(head));
-      for (const log of logs) {
-        const clone = cloneReportNode(log);
-        for (const reward of clone.querySelectorAll(
-          '.bl-row[data-act="reward"], .bl-row[data-line="reward"]',
-        )) {
-          reward.remove();
-        }
-        panel.appendChild(clone);
+      for (const row of lineRows) {
+        const targetRows =
+          row.dataset.line === "reward" ? dropRows : reportRows;
+        targetRows.push(row);
       }
-      inner.insertBefore(report, anchor);
+      const anchor = head || logs[0];
+      const dropsPanel = ensureBattleDetails(inner, {
+        attrValue: "drops",
+        anchor,
+        summaryText: `掉落物 · DROPS / ${dropRows.length} lines`,
+      });
+      renderBattlePanel(dropsPanel, null, dropRows);
 
+      const reportPanel = ensureBattleDetails(inner, {
+        attrValue: "report",
+        anchor,
+        summaryText: `戰報 · BATTLE LOG / ${reportRows.length} events`,
+      });
+      renderBattlePanel(reportPanel, head, reportRows);
       if (head) head.classList.add(HIDDEN);
       for (const log of logs) log.classList.add(HIDDEN);
+      inner.dataset.gaoExtBattle = signature;
     }
+  }
+
+  function cloneBattleReportNode(element) {
+    const clone = element.cloneNode(true);
+    clone.classList.remove(HIDDEN);
+    clone.removeAttribute(ATTR);
+    clone
+      .querySelectorAll(`[${ATTR}]`)
+      .forEach((child) => child.removeAttribute(ATTR));
+    clone
+      .querySelectorAll(`.${HIDDEN}`)
+      .forEach((child) => child.classList.remove(HIDDEN));
+    return clone;
+  }
+
+  function ensureBattleDetails(inner, options) {
+    const { anchor, attrValue, summaryText } = options;
+    let details = inner.querySelector(
+      `:scope > details[${ATTR}="${attrValue}"]`,
+    );
+    if (!details) {
+      details = document.createElement("details");
+      details.className = "gao-ext-details";
+      details.setAttribute(ATTR, attrValue);
+      const summary = document.createElement("summary");
+      const panel = document.createElement("div");
+      panel.className = "gao-ext-panel";
+      details.append(summary, panel);
+    }
+
+    setTextIfChanged(details.querySelector("summary"), summaryText);
+    if (details.nextElementSibling !== anchor)
+      inner.insertBefore(details, anchor);
+    return details.querySelector(".gao-ext-panel");
+  }
+
+  function renderBattlePanel(panel, header, rows) {
+    const nodes = [];
+    const log = document.createElement("div");
+    log.className = "bl-log";
+    log.append(...rows.map(cloneBattleReportNode));
+    if (header) nodes.push(cloneBattleReportNode(header));
+    nodes.push(log);
+    panel.replaceChildren(...nodes);
   }
 
   function enhanceMarketBuyMax() {
