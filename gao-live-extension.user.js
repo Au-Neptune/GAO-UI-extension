@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GAO UI Extension
 // @namespace    o_z_
-// @version      0.2.13
+// @version      0.2.14
 // @description  Frontend-only UI helpers for Gun Art Online.
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -409,7 +409,12 @@
           pendingCraftRequests.splice(index, 1);
         }
       }
-      await handleHookedFetchResponse(url, response, flags);
+      await handleHookedFetchResponse({
+        url,
+        response,
+        flags,
+        pendingRequestId,
+      });
       return response;
     };
   }
@@ -423,7 +428,8 @@
     }
   }
 
-  async function handleHookedFetchResponse(url, response, flags) {
+  async function handleHookedFetchResponse(options) {
+    const { url, response, flags, pendingRequestId } = options;
     if (
       !response?.ok ||
       (!flags.isCraftRequest &&
@@ -458,7 +464,7 @@
         return;
       }
       if (flags.isCraftRequest) {
-        handleCraftResponse(payload);
+        handleCraftResponse(payload, pendingRequestId);
       }
     } catch (error) {
       console.error("GAO extension: fetch hook failed.", url, error);
@@ -517,16 +523,21 @@
 
   function resolveCraftRequestMaterials(materials) {
     if (!Array.isArray(materials) || materials.length === 0) return [];
-    if (latestForgeInventory.length > 0) {
-      const materialMap = readForgeMaterialMap();
-      const missingIds = materials
-        .map((material) => normalizeNumericId(material?.item_id))
-        .filter((itemId) => itemId && !materialMap[String(itemId)]);
-      if (missingIds.length > 0) {
-        mergeForgeMaterialMapFromInventory(latestForgeInventory);
+    let materialMap = readForgeMaterialMap();
+    const hasMissingIds = materials.some((material) => {
+      const itemId = normalizeNumericId(material?.item_id);
+      return Boolean(itemId && !materialMap[String(itemId)]);
+    });
+    if (hasMissingIds && latestForgeInventory.length > 0) {
+      const merged = mergeForgeMaterialMapEntries({
+        materialMap,
+        inventory: latestForgeInventory,
+      });
+      materialMap = merged.materialMap;
+      if (merged.changed) {
+        writeForgeMaterialMap(materialMap);
       }
     }
-    const materialMap = readForgeMaterialMap();
     const resolved = [];
     for (const material of materials) {
       const itemId = normalizeNumericId(material?.item_id);
@@ -674,17 +685,30 @@
     if (!Array.isArray(inventory) || inventory.length === 0) return;
     latestForgeInventory = inventory;
     const materialMap = readForgeMaterialMap();
+    const merged = mergeForgeMaterialMapEntries({
+      materialMap,
+      inventory,
+    });
+    if (merged.changed) {
+      writeForgeMaterialMap(merged.materialMap);
+    }
+  }
+
+  function mergeForgeMaterialMapEntries(options) {
+    const { materialMap, inventory } = options;
+    const entries = { ...materialMap };
     let changed = false;
     for (const item of inventory) {
       const itemId = normalizeNumericId(item?.item_id);
       const name = String(item?.name || "").trim();
-      if (!itemId || !name || materialMap[String(itemId)] === name) continue;
-      materialMap[String(itemId)] = name;
+      if (!itemId || !name || entries[String(itemId)] === name) continue;
+      entries[String(itemId)] = name;
       changed = true;
     }
-    if (changed) {
-      writeForgeMaterialMap(materialMap);
-    }
+    return {
+      materialMap: changed ? entries : materialMap,
+      changed,
+    };
   }
 
   function readForgeMaterialMap() {
@@ -749,33 +773,58 @@
     }
   }
 
-  function handleCraftResponse(payload) {
-    const craftedId = normalizeNumericId(payload?.crafted?.id);
+  function handleCraftResponse(payload, pendingRequestId) {
+    const crafted = payload?.crafted;
+    const craftedId = normalizeNumericId(crafted?.id);
     if (!craftedId) return;
     prunePendingCraftRequests();
-    const craftedItemId = normalizeNumericId(payload?.crafted?.item_id);
-    const weaponName = String(payload?.crafted?.weapon_name || "").trim();
-    let request = null;
-    for (let index = pendingCraftRequests.length - 1; index >= 0; index -= 1) {
-      const pendingRequest = pendingCraftRequests[index];
-      if (craftedItemId && pendingRequest.resultItemId !== craftedItemId)
-        continue;
-      if (weaponName && pendingRequest.weaponName !== weaponName) continue;
-      request = pendingCraftRequests.splice(index, 1)[0];
-      break;
-    }
+    const request = takePendingCraftRequest(pendingRequestId);
     if (!request) {
       console.error(
         `GAO extension: /craft response #${craftedId} has no pending request.`,
-        payload,
+        { pendingRequestId, payload },
       );
       setForgeStatus("收到 /craft 回應，但找不到對應的鍛造請求。", "error");
       syncForgeHistoryPanel();
       return;
     }
-    const crafted = payload.crafted;
+    const craftedItemId = normalizeNumericId(crafted?.item_id);
+    const weaponName = String(crafted?.weapon_name || "").trim();
+    const responseMismatched =
+      (craftedItemId && request.resultItemId !== craftedItemId) ||
+      (weaponName && request.weaponName !== weaponName);
+    if (responseMismatched) {
+      console.error("GAO extension: /craft response mismatched request.", {
+        request,
+        payload,
+      });
+      setForgeStatus("收到 /craft 回應，但與鍛造請求不一致。", "error");
+      syncForgeHistoryPanel();
+      return;
+    }
+    const entry = buildForgeHistoryEntry({
+      payload,
+      request,
+      crafted,
+      craftedId,
+    });
+    const history = readForgeHistory().filter(
+      (item) =>
+        item.id !== entry.id &&
+        (!item.craftedId || item.craftedId !== entry.craftedId),
+    );
+    writeForgeHistory([entry, ...history].slice(0, FORGE_HISTORY_LIMIT));
+    setForgeStatus(
+      `已記錄 ${describeForgeRecipe(entry)} / ${entry.weaponName || "未命名"} #${craftedId}。`,
+      "success",
+    );
+    syncForgeHistoryPanel();
+  }
+
+  function buildForgeHistoryEntry(options) {
+    const { payload, request, crafted, craftedId } = options;
     const recipeName = String(request.recipeName || payload?.name || "").trim();
-    const entry = {
+    return {
       id: `crafted-${craftedId}`,
       craftedId,
       atk: Number(crafted?.atk || 0),
@@ -794,17 +843,15 @@
       qualityName: String(payload.qualityName || ""),
       materials: request.materials,
     };
-    const history = readForgeHistory().filter(
-      (item) =>
-        item.id !== entry.id &&
-        (!item.craftedId || item.craftedId !== entry.craftedId),
+  }
+
+  function takePendingCraftRequest(requestId) {
+    if (!requestId) return null;
+    const index = pendingCraftRequests.findIndex(
+      (request) => request.id === requestId,
     );
-    writeForgeHistory([entry, ...history].slice(0, FORGE_HISTORY_LIMIT));
-    setForgeStatus(
-      `已記錄 ${describeForgeRecipe(entry)} / ${entry.weaponName || "未命名"} #${craftedId}。`,
-      "success",
-    );
-    syncForgeHistoryPanel();
+    if (index < 0) return null;
+    return pendingCraftRequests.splice(index, 1)[0];
   }
 
   // 確保鍛造履歷面板存在於正確位置，
@@ -1189,7 +1236,7 @@
     return materials
       .map((material) => {
         const name = String(material?.name || "").trim();
-        const quantity = Number(material?.quantity ?? material?.qty ?? 0);
+        const quantity = Number(material?.quantity ?? 0);
         if (!name || quantity < 1) return null;
         return { name, quantity };
       })
