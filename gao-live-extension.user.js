@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         GAO UI Extension
+// @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.2.14
-// @description  Frontend-only UI helpers for Gun Art Online.
+// @version      0.3.0
+// @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
 // @grant        none
@@ -20,6 +20,105 @@
   const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
   const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
   const ME_SNAPSHOT_KEY = "gao-ext-me-snapshot-v1";
+  const DISPLAY_THEME_KEY = "gao-ext-display-theme-v1";
+  const DISPLAY_BACKGROUND_DISABLED_KEY =
+    "gao-ext-display-background-disabled-v1";
+  const DEFAULT_DISPLAY_THEME_ID = "original";
+  const DEFAULT_BACKGROUND_DISABLED = false;
+  const DISPLAY_THEMES = Object.freeze({
+    original: Object.freeze({
+      label: "原始網頁風格（預設）",
+      css: "",
+    }),
+    "twitter-dim": Object.freeze({
+      label: "Twitter / X 黯藍主題 (Dim Mode)",
+      css: `
+        :root {
+          --bg-void: #10171e;
+          --bg-deep: #15202b;
+          --bg-panel: #1e2732;
+          --bg-elevated: #273340;
+          --bg-input: #19212a;
+          --bg-overlay: rgba(21, 32, 43, 0.78);
+          --border-faint: rgba(56, 68, 77, 0.15);
+          --border-soft: rgba(56, 68, 77, 0.35);
+          --border-default: #38444d;
+          --border-strong: #516270;
+          --text-primary: #ffffff;
+          --text-secondary: #e1e8ed;
+          --text-tertiary: #aab8c2;
+          --text-muted: #8594a6;
+          --text-inverse: #15202b;
+        }
+      `,
+    }),
+    "twitter-black": Object.freeze({
+      label: "Twitter / X 極緻純黑",
+      css: `
+        :root {
+          --bg-void: #000000;
+          --bg-deep: #000000;
+          --bg-panel: #15181c;
+          --bg-elevated: #202327;
+          --bg-input: #16181c;
+          --bg-overlay: rgba(0, 0, 0, 0.8);
+          --border-faint: rgba(47, 51, 54, 0.2);
+          --border-soft: rgba(47, 51, 54, 0.4);
+          --border-default: #2f3336;
+          --border-strong: #454b50;
+          --text-primary: #e7e9ea;
+          --text-secondary: #cdd9e5;
+          --text-tertiary: #909dab;
+          --text-muted: #768390;
+          --text-inverse: #000000;
+        }
+      `,
+    }),
+    discord: Object.freeze({
+      label: "Discord 經典暗灰主題",
+      css: `
+        :root {
+          --bg-void: #111214;
+          --bg-deep: #1e1f22;
+          --bg-panel: #2b2d31;
+          --bg-elevated: #313338;
+          --bg-input: #1e1f22;
+          --bg-overlay: rgba(17, 18, 20, 0.8);
+          --border-faint: rgba(63, 65, 71, 0.2);
+          --border-soft: rgba(63, 65, 71, 0.4);
+          --border-default: #3f4147;
+          --border-strong: #4e5058;
+          --text-primary: #f2f3f5;
+          --text-secondary: #dbdee1;
+          --text-tertiary: #a5a9b0;
+          --text-muted: #80848e;
+          --text-inverse: #111214;
+        }
+      `,
+    }),
+    facebook: Object.freeze({
+      label: "Facebook 舒適暖灰主題",
+      css: `
+        :root {
+          --bg-void: #121213;
+          --bg-deep: #18191a;
+          --bg-panel: #242526;
+          --bg-elevated: #2f3032;
+          --bg-input: #3a3b3c;
+          --bg-overlay: rgba(18, 18, 19, 0.83);
+          --border-faint: rgba(62, 64, 66, 0.25);
+          --border-soft: rgba(62, 64, 66, 0.45);
+          --border-default: #3e4042;
+          --border-strong: #505356;
+          --text-primary: #ffffff;
+          --text-secondary: #e4e6eb;
+          --text-tertiary: #b0b3b8;
+          --text-muted: #94969b;
+          --text-inverse: #18191a;
+        }
+      `,
+    }),
+  });
   const FORGE_HISTORY_LIMIT = 24;
   const PENDING_CRAFT_REQUEST_WINDOW_MS = 2 * 60 * 1000;
   const PENDING_FORGE_REPLAY_CONTEXT_WINDOW_MS = 10 * 1000;
@@ -203,6 +302,7 @@
         "DOMContentLoaded",
         () => {
           injectStyles();
+          applyDisplayPreferences(readDisplayPreferences());
           mountForRoute();
         },
         {
@@ -212,6 +312,7 @@
       return;
     }
     injectStyles();
+    applyDisplayPreferences(readDisplayPreferences());
     mountForRoute();
   }
 
@@ -242,6 +343,9 @@
     }
     if (path === "/town") {
       return mountMainObservedPage(syncTownMineMpEstimate);
+    }
+    if (path === "/settings") {
+      return mountMainObservedPage(syncSettingsDisplayOptions);
     }
     if (path.startsWith("/records/")) {
       return mountMainObservedPage(enhanceBattleReport);
@@ -677,8 +781,153 @@
       .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat { margin-left: 4px; font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat[data-state="error"] { color: var(--danger-300, #ff8a8a); }
+      .gao-ext-settings-stack { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
+      .gao-ext-settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding: var(--s-4); background: var(--bg-elevated); border: 1px solid var(--border-faint); }
+      .gao-ext-settings-copy { min-width: 0; }
+      .gao-ext-settings-title { font-family: var(--font-display); font-size: var(--fs-xs); font-weight: 700; letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--text-primary); margin-bottom: 6px; }
+      .gao-ext-settings-description { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); line-height: var(--lh-relax); }
+      .gao-ext-settings-toggle { flex-shrink: 0; position: relative; width: 56px; height: 28px; background: var(--bg-input); border: 1px solid var(--border-soft); box-shadow: none; clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px); transition: all var(--dur-med); cursor: pointer; }
+      .gao-ext-settings-toggle span { position: absolute; top: 4px; bottom: 4px; width: 20px; left: 4px; background: var(--border-default); box-shadow: none; clip-path: polygon(2px 0, 100% 0, 100% calc(100% - 2px), calc(100% - 2px) 100%, 0 100%, 0 2px); transition: all var(--dur-med); }
+      .gao-ext-settings-toggle[data-enabled="true"] { background: var(--cyan-500); border-color: var(--cyan-300); }
+      .gao-ext-settings-toggle[data-enabled="true"] span { left: 30px; background: var(--bg-void); }
+      .gao-ext-settings-select { flex: 0 1 280px; min-width: 180px; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border-soft); color: var(--text-primary); font-family: var(--font-mono); font-size: var(--fs-xs); }
     `;
     document.head.appendChild(style);
+  }
+
+  function syncSettingsDisplayOptions() {
+    let block = null;
+    for (const heading of document.querySelectorAll(".blk__title")) {
+      if (!heading.textContent?.includes("Display")) continue;
+      block = heading.closest(".blk");
+      break;
+    }
+    if (!block) return;
+    let controls = block.querySelector(`[${ATTR}="settings-display-options"]`);
+    if (!controls) {
+      controls = createSettingsDisplayControls();
+      block.appendChild(controls);
+    }
+    const preferences = readDisplayPreferences();
+    const toggle = controls.querySelector(
+      `[${ATTR}="settings-background-toggle"]`,
+    );
+    toggle.dataset.enabled = String(preferences.backgroundDisabled);
+    toggle.setAttribute("aria-pressed", String(preferences.backgroundDisabled));
+    const select = controls.querySelector(`[${ATTR}="settings-theme-select"]`);
+    select.value = preferences.themeId;
+    applyDisplayPreferences(preferences);
+  }
+
+  function createSettingsDisplayControls() {
+    const controls = document.createElement("div");
+    controls.className = "gao-ext-settings-stack";
+    controls.setAttribute(ATTR, "settings-display-options");
+    const backgroundToggle = document.createElement("button");
+    backgroundToggle.type = "button";
+    backgroundToggle.className = "gao-ext-settings-toggle";
+    backgroundToggle.setAttribute(ATTR, "settings-background-toggle");
+    backgroundToggle.setAttribute("aria-label", "關閉背景亮光及格子");
+    backgroundToggle.appendChild(document.createElement("span"));
+    backgroundToggle.addEventListener("click", () => {
+      const preferences = readDisplayPreferences();
+      writeDisplayPreferences({
+        ...preferences,
+        backgroundDisabled: !preferences.backgroundDisabled,
+      });
+      syncSettingsDisplayOptions();
+    });
+    const themeSelect = document.createElement("select");
+    themeSelect.className = "gao-ext-settings-select";
+    themeSelect.setAttribute(ATTR, "settings-theme-select");
+    themeSelect.setAttribute("aria-label", "畫面風格");
+    for (const [themeId, theme] of Object.entries(DISPLAY_THEMES)) {
+      const option = document.createElement("option");
+      option.value = themeId;
+      option.textContent = theme.label;
+      themeSelect.appendChild(option);
+    }
+    themeSelect.addEventListener("change", () => {
+      const preferences = readDisplayPreferences();
+      writeDisplayPreferences({ ...preferences, themeId: themeSelect.value });
+    });
+    controls.append(
+      createSettingsDisplayRow({
+        title: "BACKGROUND EFFECTS / 關閉背景亮光及格子",
+        description: "移除全頁背景亮光與格子 · 僅影響本裝置",
+        control: backgroundToggle,
+      }),
+      createSettingsDisplayRow({
+        title: "VISUAL STYLE / 畫面風格",
+        description: "選擇介面配色；可切回原始網頁風格 · 僅影響本裝置",
+        control: themeSelect,
+      }),
+    );
+    return controls;
+  }
+
+  function createSettingsDisplayRow(options) {
+    const row = document.createElement("div");
+    row.className = "gao-ext-settings-row";
+    const copy = document.createElement("div");
+    copy.className = "gao-ext-settings-copy";
+    const title = document.createElement("div");
+    title.className = "gao-ext-settings-title";
+    title.textContent = options.title;
+    const description = document.createElement("div");
+    description.className = "gao-ext-settings-description";
+    description.textContent = options.description;
+    copy.append(title, description);
+    row.append(copy, options.control);
+    return row;
+  }
+
+  function readDisplayPreferences() {
+    const themeId =
+      localStorage.getItem(DISPLAY_THEME_KEY) ?? DEFAULT_DISPLAY_THEME_ID;
+    if (!Object.hasOwn(DISPLAY_THEMES, themeId)) {
+      throw new Error(`GAO extension: unsupported display theme "${themeId}".`);
+    }
+    const backgroundValue = localStorage.getItem(
+      DISPLAY_BACKGROUND_DISABLED_KEY,
+    );
+    if (
+      backgroundValue !== null &&
+      backgroundValue !== "true" &&
+      backgroundValue !== "false"
+    ) {
+      throw new Error("GAO extension: invalid background preference.");
+    }
+    return Object.freeze({
+      themeId,
+      backgroundDisabled:
+        backgroundValue === null
+          ? DEFAULT_BACKGROUND_DISABLED
+          : backgroundValue === "true",
+    });
+  }
+
+  function writeDisplayPreferences(preferences) {
+    localStorage.setItem(DISPLAY_THEME_KEY, preferences.themeId);
+    localStorage.setItem(
+      DISPLAY_BACKGROUND_DISABLED_KEY,
+      String(preferences.backgroundDisabled),
+    );
+    applyDisplayPreferences(preferences);
+  }
+
+  function applyDisplayPreferences(preferences) {
+    const theme = DISPLAY_THEMES[preferences.themeId];
+    const backgroundCss = preferences.backgroundDisabled
+      ? "#root { background: none; } .gao-bg { background:none; } html[data-bg=on] #root, html[data-bg=on] .gao-bg { background-image: none; }"
+      : "";
+    let style = document.querySelector(`style[${ATTR}="display-preferences"]`);
+    if (!style) {
+      style = document.createElement("style");
+      style.setAttribute(ATTR, "display-preferences");
+      document.head.appendChild(style);
+    }
+    style.textContent = `${theme.css}\n${backgroundCss}`;
   }
 
   function mergeForgeMaterialMapFromInventory(inventory) {
