@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.3.0
-// @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
+// @version      0.3.1
+// @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
 // @grant        none
@@ -133,35 +133,6 @@
     attributes: true,
     attributeFilter: ["class", "style"],
   };
-  const INVENTORY_CATEGORY_KEYS = [
-    "all",
-    "weapon",
-    "material",
-    "consumable",
-    "skillbook",
-    "ammo",
-  ];
-  const INVENTORY_COLOR_OPTIONS = [
-    { key: "red", label: "紅", hex: "#ff5a5a" },
-    { key: "orange", label: "橙", hex: "#ff9f43" },
-    { key: "yellow", label: "黃", hex: "#ffd23f" },
-    { key: "green", label: "綠", hex: "#4ade80" },
-    { key: "blue", label: "藍", hex: "#38bdf8" },
-    { key: "purple", label: "紫", hex: "#c084fc" },
-  ];
-  const INVENTORY_SORT_KEY_BY_LABEL = {
-    品質: "quality",
-    種類: "type",
-    時間: "time",
-    攻: "atk",
-    防: "def",
-    幸: "luck",
-    重: "weight",
-    耐: "dur",
-  };
-  const INVENTORY_COLOR_ROW_LABEL = "顏色 ·";
-  const INVENTORY_ACTIVE_COLOR_BORDER = "2px solid var(--text-primary)";
-  const INVENTORY_ACTIVE_COLOR_GLOW = "0 0 0 1px";
   const INVENTORY_EQUIPMENT_CELL_SELECTOR =
     ".inv-center .grid-wrap .cell.cell--filled";
   const INVENTORY_SELECTED_EQUIPMENT_CELL_SELECTOR =
@@ -1660,106 +1631,26 @@
     const cells = [
       ...document.querySelectorAll(INVENTORY_EQUIPMENT_CELL_SELECTOR),
     ];
-    if (cells.length === 0) return;
-    const categoryButtons = [...document.querySelectorAll(".inv-left .cat")];
-    const activeCategoryIndex = categoryButtons.findIndex((button) =>
-      button.classList.contains("cat--active"),
-    );
-    const colorRow = [...document.querySelectorAll(".inv-center > div")].find(
-      (element) =>
-        String(element.textContent || "").includes(INVENTORY_COLOR_ROW_LABEL),
-    );
-    const colorButtons = colorRow
-      ? [...colorRow.querySelectorAll("button")].slice(1)
-      : [];
-    const activeColorIndex = colorButtons.findIndex((button) => {
-      const style = button?.getAttribute?.("style") || "";
-      return (
-        style.includes(INVENTORY_ACTIVE_COLOR_BORDER) &&
-        style.includes(INVENTORY_ACTIVE_COLOR_GLOW)
-      );
-    });
-    const sortLabel = String(
-      document.querySelector(".inv-center .toolbar .seg__btn--active")
-        ?.textContent || "",
-    ).trim();
-    const uiState = {
-      categoryKey: INVENTORY_CATEGORY_KEYS[activeCategoryIndex] ?? null,
-      colorKey: INVENTORY_COLOR_OPTIONS[activeColorIndex]?.key ?? null,
-      searchText: String(
-        document.querySelector(".inv-center .toolbar input")?.value || "",
-      ).trim(),
-      sortKey: INVENTORY_SORT_KEY_BY_LABEL[sortLabel] || "quality",
-    };
-    const visibleIds =
-      uiState.categoryKey &&
-      uiState.categoryKey !== "all" &&
-      uiState.categoryKey !== "weapon"
-        ? []
-        : filterAndSortEquipmentItems(equipmentItems, uiState)
-            .map((item) => normalizeNumericId(item?.id ?? item?.item_id))
-            .filter(Boolean);
-    for (const [index, cell] of cells.entries()) {
-      const itemId = visibleIds[index];
-      if (itemId) {
-        const nextValue = String(itemId);
-        if (cell.dataset.gaoExtItemId !== nextValue) {
-          cell.dataset.gaoExtItemId = nextValue;
-        }
-        continue;
-      }
-      if (cell.dataset.gaoExtItemId) {
-        delete cell.dataset.gaoExtItemId;
-      }
+    for (const cell of cells) {
+      const itemId = readInventoryEquipmentIdFromFiber(cell);
+      const nextValue = String(itemId);
+      if (cell.dataset.gaoExtItemId === nextValue) continue;
+      cell.dataset.gaoExtItemId = nextValue;
     }
   }
 
-  function filterAndSortEquipmentItems(items, uiState) {
-    const searchText = uiState.searchText.toLowerCase();
-    return items
-      .filter(
-        (item) => !uiState.colorKey || item?.color_tag === uiState.colorKey,
-      )
-      .filter((item) => {
-        if (!searchText) return true;
-        return String(item?.weapon_name ?? item?.name ?? "")
-          .toLowerCase()
-          .includes(searchText);
-      })
-      .slice()
-      .sort((left, right) =>
-        compareEquipmentItems(left, right, uiState.sortKey),
-      );
-  }
-
-  function compareEquipmentItems(left, right, sortKey) {
-    switch (sortKey) {
-      case "quality":
-        return (
-          (right?.name_rolls?.quality ?? -1) - (left?.name_rolls?.quality ?? -1)
-        );
-      case "time":
-        return (
-          new Date(right?.created_at ?? 0).getTime() -
-          new Date(left?.created_at ?? 0).getTime()
-        );
-      case "type":
-        return String(left?.name ?? "").localeCompare(
-          String(right?.name ?? ""),
-        );
-      case "atk":
-        return Number(right?.atk || 0) - Number(left?.atk || 0);
-      case "def":
-        return Number(right?.def || 0) - Number(left?.def || 0);
-      case "luck":
-        return Number(right?.luck || 0) - Number(left?.luck || 0);
-      case "weight":
-        return Number(right?.weight || 0) - Number(left?.weight || 0);
-      case "dur":
-        return Number(right?.durability || 0) - Number(left?.durability || 0);
-      default:
-        return 0;
+  function readInventoryEquipmentIdFromFiber(cell) {
+    const fiberProperty = Object.keys(cell).find((property) =>
+      property.startsWith("__reactFiber$"),
+    );
+    if (!fiberProperty) {
+      throw new Error("GAO extension: React Fiber property not found.");
     }
+    const itemId = normalizeNumericId(cell[fiberProperty]?.key);
+    if (!itemId) {
+      throw new Error("GAO extension: inventory equipment Fiber key missing.");
+    }
+    return itemId;
   }
 
   function renderInventoryBaseStatsInline(detail, itemId, equipment) {
