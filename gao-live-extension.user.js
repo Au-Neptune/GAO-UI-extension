@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.4.0
+// @version      0.4.1
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -1685,6 +1685,7 @@
   function createInventoryEquipmentLayoutToggle() {
     const toggle = document.createElement("button");
     toggle.type = "button";
+    toggle.textContent = "條列模式";
     toggle.className = "gao-ext-inventory-layout-toggle";
     toggle.setAttribute(ATTR, "inventory-layout-toggle");
     toggle.addEventListener("click", () => {
@@ -1730,11 +1731,14 @@
       toggle = createInventoryEquipmentLayoutToggle();
       controls.insertBefore(toggle, controls.firstChild);
     }
+    if (toggle.dataset.mode === inventoryEquipmentLayoutMode) {
+      return;
+    }
     const isListMode =
       inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_LIST;
     toggle.dataset.mode = inventoryEquipmentLayoutMode;
     toggle.setAttribute("aria-pressed", String(isListMode));
-    toggle.textContent = isListMode ? "▦ 格狀" : "▤ 條列";
+
     if (inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_GRID) {
       grid.classList.remove(HIDDEN);
       wrapper.querySelector(`[${ATTR}="inventory-list"]`)?.remove();
