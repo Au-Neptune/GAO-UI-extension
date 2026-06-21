@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.3.1
+// @version      0.4.0
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -133,11 +133,57 @@
     attributes: true,
     attributeFilter: ["class", "style"],
   };
-  const INVENTORY_EQUIPMENT_CELL_SELECTOR =
-    ".inv-center .grid-wrap .cell.cell--filled";
-  const INVENTORY_SELECTED_EQUIPMENT_CELL_SELECTOR =
-    ".inv-center .grid-wrap .cell.cell--selected";
   const EQUIPMENT_QUALITY_ROLL_KEY = "quality";
+  const INVENTORY_LAYOUT_MODE_GRID = "grid";
+  const INVENTORY_LAYOUT_MODE_LIST = "list";
+  const INVENTORY_LAYOUT_MODE_KEY = "gao-ext-inventory-layout-v1";
+  const INVENTORY_EQUIPMENT_GRID_SELECTOR = ".inv-center .grid-wrap .igrid";
+  const INVENTORY_QUALITY_COLOR_BY_NAME = Object.freeze({
+    傳說: "var(--q-legendary)",
+    神話: "var(--q-mythic)",
+    史詩: "var(--q-epic)",
+    完美: "var(--q-rare)",
+    頂級: "var(--q-rare)",
+    精良: "var(--q-superior)",
+    高級: "var(--q-fine)",
+    上等: "var(--q-uncommon)",
+    普通: "var(--q-common)",
+    次等: "var(--q-poor)",
+    劣質: "var(--q-trash)",
+    破爛: "var(--q-trash)",
+    垃圾般: "var(--q-shit)",
+    屎一般: "var(--q-shit)",
+  });
+  const INVENTORY_SLOT_LABEL_BY_KEY = Object.freeze({
+    head: "頭部",
+    body: "身體",
+    gloves: "手套",
+    shoes: "鞋子",
+    main_hand: "主手",
+    off_hand: "副手",
+    underwear: "內衣",
+    necklace: "項鍊",
+    ring: "戒指",
+    earring: "耳環",
+  });
+  const INVENTORY_TYPE_LABEL_BY_TAG = Object.freeze({
+    Katana: "太刀",
+    Sword: "單手劍",
+    Dagger: "短刀",
+    Rapier: "細劍",
+    Axe: "雙手斧",
+    GreatSword: "雙手劍",
+    Bow: "弓",
+    Pistol: "手槍",
+    SMG: "衝鋒槍",
+    LMG: "輕機槍",
+    Sniper: "狙擊槍",
+    Shield: "盾牌",
+    BareHand: "空手",
+    Universal: "通用",
+    Gun: "通用槍械",
+    Chain: "鎖鏈",
+  });
   const INVENTORY_BASE_STAT_FIELDS = [
     { key: "atk", statLabel: "ATK", rollKey: "atk" },
     { key: "def", statLabel: "DEF", rollKey: "def" },
@@ -259,10 +305,10 @@
   let pendingForgeReplayContext = null;
   const pendingCraftRequests = [];
   let latestForgeInventory = [];
-  let inventoryItems = [];
-  let inventoryById = new Map();
   let equipmentItems = [];
   let equipmentById = new Map();
+  let inventoryEquipmentLayoutMode = readInventoryEquipmentLayoutMode();
+  const inventoryEquipmentListRenderStates = new WeakMap();
   const warnings = new Set();
 
   function boot() {
@@ -303,6 +349,7 @@
     if (path === "/inventory") {
       return mountMainObservedPage(() => {
         syncInventoryDetailEnhancements();
+        syncInventoryEquipmentListLayout();
       }, INVENTORY_OBSERVER_OPTIONS);
     }
     if (path === "/forge") return mountForgePage();
@@ -450,10 +497,6 @@
         isCraftRequest: requestPathMatches(url, /\/craft\/?$/i),
         isMeRequest: requestPathMatches(url, /\/me\/?$/i),
         isRecipesRequest: requestPathMatches(url, /\/recipes\/?$/i),
-        isInventoryItemsRequest: requestPathMatches(
-          url,
-          /\/api\/inventory\/?$/i,
-        ),
         isEquipmentRequest: requestPathMatches(
           url,
           /\/api\/forge\/equipment\/?$/i,
@@ -510,7 +553,6 @@
       (!flags.isCraftRequest &&
         !flags.isMeRequest &&
         !flags.isRecipesRequest &&
-        !flags.isInventoryItemsRequest &&
         !flags.isEquipmentRequest)
     ) {
       return;
@@ -526,16 +568,17 @@
         mergeForgeMaterialMapFromInventory(payload?.inventory);
         return;
       }
-      if (flags.isInventoryItemsRequest) {
-        inventoryItems = Array.isArray(payload?.items) ? payload.items : [];
-        inventoryById = buildInventoryById(inventoryItems);
-        return;
-      }
       if (flags.isEquipmentRequest) {
         equipmentItems = Array.isArray(payload?.equipment)
           ? payload.equipment
           : [];
-        equipmentById = buildInventoryById(equipmentItems);
+        const nextEquipmentById = new Map();
+        for (const item of equipmentItems) {
+          const itemId = normalizeNumericId(item?.id);
+          if (!itemId) continue;
+          nextEquipmentById.set(itemId, item);
+        }
+        equipmentById = nextEquipmentById;
         return;
       }
       if (flags.isCraftRequest) {
@@ -544,16 +587,6 @@
     } catch (error) {
       console.error("GAO extension: fetch hook failed.", url, error);
     }
-  }
-
-  function buildInventoryById(items) {
-    const next = new Map();
-    for (const item of items) {
-      const itemId = normalizeNumericId(item?.id);
-      if (!itemId) continue;
-      next.set(itemId, item);
-    }
-    return next;
   }
 
   function queueCraftRequest(payload) {
@@ -752,6 +785,20 @@
       .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat { margin-left: 4px; font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat[data-state="error"] { color: var(--danger-300, #ff8a8a); }
+      .gao-ext-inventory-layout-toggle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; padding: 2px 8px; border: 1px solid var(--border-soft); background: none; color: var(--text-muted); cursor: pointer; }
+      .gao-ext-inventory-layout-toggle[data-mode="list"] { color: var(--cyan-300); border-color: var(--cyan-400); background: rgba(0, 203, 240, 0.08); }
+      .gao-ext-inventory-list { display: flex; flex-direction: column; gap: 6px; width: 100%; max-height: 600px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; box-sizing: border-box; }
+      .gao-ext-inventory-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: var(--bg-panel); border: 1px solid var(--border-soft); cursor: pointer; transition: all 0.15s ease-out; box-sizing: border-box; width: 100%; font: inherit; text-align: left; }
+      .gao-ext-inventory-row:hover { background: rgba(255, 255, 255, 0.02); border-color: var(--border-strong); }
+      .gao-ext-inventory-row[data-selected="true"] { background: rgba(0, 203, 240, 0.08); border-color: var(--cyan-400); box-shadow: 0 0 12px rgba(0, 203, 240, 0.15); }
+      .gao-ext-inventory-row-main { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; margin-right: 12px; }
+      .gao-ext-inventory-row-type { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); width: 32px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .gao-ext-inventory-row-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .gao-ext-inventory-row-marker { font-size: 10px; flex-shrink: 0; font-family: var(--font-mono); font-weight: 600; }
+      .gao-ext-inventory-row-stats { display: grid; grid-template-columns: 62px 56px 52px 52px 90px; gap: 2px; flex-shrink: 0; text-align: left; }
+      .gao-ext-inventory-stat-tag { color: var(--text-muted); margin-right: 4px; font-size: 10px; }
+      .gao-ext-inventory-stat-value { font-weight: 500; color: var(--lime-300); }
+      .gao-ext-inventory-stat-value[data-broken="true"] { color: var(--red-400); }
       .gao-ext-settings-stack { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
       .gao-ext-settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding: var(--s-4); background: var(--bg-elevated); border: 1px solid var(--border-faint); }
       .gao-ext-settings-copy { min-width: 0; }
@@ -998,7 +1045,15 @@
     const craftedId = normalizeNumericId(crafted?.id);
     if (!craftedId) return;
     prunePendingCraftRequests();
-    const request = takePendingCraftRequest(pendingRequestId);
+    let request = null;
+    if (pendingRequestId) {
+      const index = pendingCraftRequests.findIndex(
+        (pendingRequest) => pendingRequest.id === pendingRequestId,
+      );
+      if (index >= 0) {
+        request = pendingCraftRequests.splice(index, 1)[0];
+      }
+    }
     if (!request) {
       console.error(
         `GAO extension: /craft response #${craftedId} has no pending request.`,
@@ -1063,15 +1118,6 @@
       qualityName: String(payload.qualityName || ""),
       materials: request.materials,
     };
-  }
-
-  function takePendingCraftRequest(requestId) {
-    if (!requestId) return null;
-    const index = pendingCraftRequests.findIndex(
-      (request) => request.id === requestId,
-    );
-    if (index < 0) return null;
-    return pendingCraftRequests.splice(index, 1)[0];
   }
 
   // 確保鍛造履歷面板存在於正確位置，
@@ -1606,18 +1652,15 @@
   function syncInventoryDetailEnhancements() {
     const detail = document.querySelector(".inv-right .detail-card");
     if (!detail) return;
-    syncVisibleEquipmentItemIds();
-    const selected = document.querySelector(
-      INVENTORY_SELECTED_EQUIPMENT_CELL_SELECTOR,
-    );
-    const itemId = normalizeNumericId(selected?.dataset.gaoExtItemId);
-    if (selected && !itemId) {
-      warnOnce(
-        "inventory-selected-item-id",
-        "GAO extension: selected inventory item id missing.",
-      );
+    const equipment = readReactFiber(detail, "detail").return?.memoizedProps
+      ?.eq;
+    if (!equipment || typeof equipment !== "object") {
+      throw new Error("GAO extension: detail Fiber equipment prop missing.");
     }
-    const equipment = itemId ? (equipmentById.get(itemId) ?? null) : null;
+    const itemId = normalizeNumericId(equipment.id);
+    if (!itemId) {
+      throw new Error("GAO extension: inventory detail equipment id missing.");
+    }
     const entry = itemId
       ? (readForgeHistory().find(
           (historyEntry) => historyEntry.craftedId === itemId,
@@ -1627,30 +1670,244 @@
     renderInventoryForgeMaterials(detail, itemId, entry);
   }
 
-  function syncVisibleEquipmentItemIds() {
-    const cells = [
-      ...document.querySelectorAll(INVENTORY_EQUIPMENT_CELL_SELECTOR),
-    ];
-    for (const cell of cells) {
-      const itemId = readInventoryEquipmentIdFromFiber(cell);
-      const nextValue = String(itemId);
-      if (cell.dataset.gaoExtItemId === nextValue) continue;
-      cell.dataset.gaoExtItemId = nextValue;
-    }
-  }
-
-  function readInventoryEquipmentIdFromFiber(cell) {
-    const fiberProperty = Object.keys(cell).find((property) =>
+  function readReactFiber(element, label) {
+    const fiberProperty = Object.keys(element).find((property) =>
       property.startsWith("__reactFiber$"),
     );
-    if (!fiberProperty) {
-      throw new Error("GAO extension: React Fiber property not found.");
+    if (!fiberProperty || !element[fiberProperty]) {
+      throw new Error(
+        `GAO extension: ${label} React Fiber property not found.`,
+      );
     }
-    const itemId = normalizeNumericId(cell[fiberProperty]?.key);
-    if (!itemId) {
-      throw new Error("GAO extension: inventory equipment Fiber key missing.");
+    return element[fiberProperty];
+  }
+
+  function createInventoryEquipmentLayoutToggle() {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "gao-ext-inventory-layout-toggle";
+    toggle.setAttribute(ATTR, "inventory-layout-toggle");
+    toggle.addEventListener("click", () => {
+      inventoryEquipmentLayoutMode =
+        inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_GRID
+          ? INVENTORY_LAYOUT_MODE_LIST
+          : INVENTORY_LAYOUT_MODE_GRID;
+      localStorage.setItem(
+        INVENTORY_LAYOUT_MODE_KEY,
+        inventoryEquipmentLayoutMode,
+      );
+      syncInventoryEquipmentListLayout();
+    });
+    return toggle;
+  }
+
+  function readInventoryEquipmentLayoutMode() {
+    const storedMode = localStorage.getItem(INVENTORY_LAYOUT_MODE_KEY);
+    return storedMode === INVENTORY_LAYOUT_MODE_LIST
+      ? INVENTORY_LAYOUT_MODE_LIST
+      : INVENTORY_LAYOUT_MODE_GRID;
+  }
+
+  function syncInventoryEquipmentListLayout() {
+    const grid = document.querySelector(INVENTORY_EQUIPMENT_GRID_SELECTOR);
+    if (!grid) {
+      document.querySelector(`[${ATTR}="inventory-list"]`)?.remove();
+      return;
     }
-    return itemId;
+    const wrapper = grid.closest(".grid-wrap");
+    const header = wrapper?.querySelector(":scope > .grid-wrap__head");
+    if (!wrapper || !header) {
+      throw new Error(
+        "GAO extension: inventory equipment grid structure missing.",
+      );
+    }
+    const controls = header.lastElementChild;
+    if (!(controls instanceof HTMLElement)) {
+      throw new Error("GAO extension: inventory layout controls missing.");
+    }
+    let toggle = controls.querySelector(`[${ATTR}="inventory-layout-toggle"]`);
+    if (!toggle) {
+      toggle = createInventoryEquipmentLayoutToggle();
+      controls.insertBefore(toggle, controls.firstChild);
+    }
+    const isListMode =
+      inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_LIST;
+    toggle.dataset.mode = inventoryEquipmentLayoutMode;
+    toggle.setAttribute("aria-pressed", String(isListMode));
+    toggle.textContent = isListMode ? "▦ 格狀" : "▤ 條列";
+    if (inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_GRID) {
+      grid.classList.remove(HIDDEN);
+      wrapper.querySelector(`[${ATTR}="inventory-list"]`)?.remove();
+      return;
+    }
+    grid.classList.add(HIDDEN);
+    let list = wrapper.querySelector(`[${ATTR}="inventory-list"]`);
+    if (!list) {
+      list = document.createElement("div");
+      list.className = "gao-ext-inventory-list";
+      list.setAttribute(ATTR, "inventory-list");
+    }
+    if (list.previousElementSibling !== grid) {
+      grid.insertAdjacentElement("afterend", list);
+    }
+    const items = readVisibleInventoryEquipment(grid);
+    if (!shouldRenderInventoryEquipmentList(list, items)) return;
+    list.replaceChildren(...items.map(createInventoryEquipmentListRow));
+  }
+
+  function readVisibleInventoryEquipment(grid) {
+    return [...grid.querySelectorAll(":scope > .cell.cell--filled")].map(
+      (cell) => {
+        const itemId = normalizeNumericId(
+          readReactFiber(cell, "inventory equipment").key,
+        );
+        if (!itemId) {
+          throw new Error(
+            "GAO extension: inventory equipment Fiber key missing.",
+          );
+        }
+        const equipment = equipmentById.get(itemId);
+        if (!equipment) {
+          throw new Error(
+            `GAO extension: equipment ${itemId} missing from equipment cache.`,
+          );
+        }
+        return { cell, equipment, itemId };
+      },
+    );
+  }
+
+  function shouldRenderInventoryEquipmentList(list, items) {
+    const previousState = inventoryEquipmentListRenderStates.get(list);
+    const isUnchanged =
+      previousState?.length === items.length &&
+      previousState.every((previousItem, index) => {
+        const currentItem = items[index];
+        return (
+          previousItem.cell === currentItem.cell &&
+          previousItem.className === currentItem.cell.className &&
+          previousItem.equipment === currentItem.equipment &&
+          previousItem.itemId === currentItem.itemId
+        );
+      });
+    if (isUnchanged) return false;
+    inventoryEquipmentListRenderStates.set(
+      list,
+      items.map(({ cell, equipment, itemId }) => ({
+        cell,
+        className: cell.className,
+        equipment,
+        itemId,
+      })),
+    );
+    return true;
+  }
+
+  function createInventoryEquipmentListRow({ cell, equipment }) {
+    const quality = getQualityByRoll(equipment.name_rolls?.quality);
+    const qualityColor =
+      INVENTORY_QUALITY_COLOR_BY_NAME[quality?.name] ?? "var(--q-common)";
+    const displayName = String(
+      equipment.weapon_name ?? equipment.name ?? "未命名",
+    );
+    const durability = equipment.durability ?? 0;
+    const maxDurability = equipment.max_durability ?? durability;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "gao-ext-inventory-row";
+    row.dataset.selected = String(cell.classList.contains("cell--selected"));
+    row.style.borderLeft = `3px solid ${qualityColor}`;
+    row.title = displayName;
+    row.setAttribute("aria-label", displayName);
+    row.addEventListener("click", () => cell.click());
+    row.append(
+      createInventoryEquipmentRowMain({
+        cell,
+        displayName,
+        equipment,
+        qualityColor,
+      }),
+      createInventoryEquipmentRowStats({
+        equipment,
+        durability,
+        maxDurability,
+      }),
+    );
+    return row;
+  }
+
+  function createInventoryEquipmentRowMain(options) {
+    const { cell, displayName, equipment, qualityColor } = options;
+    const main = document.createElement("div");
+    main.className = "gao-ext-inventory-row-main";
+    const type = document.createElement("span");
+    type.className = "gao-ext-inventory-row-type";
+    const slot = String(equipment.equipment_slot ?? "").trim();
+    let typeLabel = INVENTORY_SLOT_LABEL_BY_KEY[slot];
+    if (!typeLabel && Array.isArray(equipment.tags)) {
+      for (const tag of equipment.tags) {
+        const tagLabel = INVENTORY_TYPE_LABEL_BY_TAG[String(tag)];
+        if (!tagLabel) continue;
+        typeLabel = tagLabel;
+        break;
+      }
+    }
+    type.textContent = typeLabel || "未分類";
+    type.title = type.textContent;
+    const name = document.createElement("span");
+    name.className = "gao-ext-inventory-row-name";
+    name.style.color = qualityColor;
+    name.textContent = displayName;
+    main.append(type);
+    if (cell.classList.contains("cell--equipped")) {
+      main.append(
+        createInventoryEquipmentRowMarker("[E]", "var(--magenta-300)"),
+      );
+    }
+    if (equipment.locked) {
+      main.append(createInventoryEquipmentRowMarker("🔒", "var(--gold-400)"));
+    }
+    main.append(name);
+    return main;
+  }
+
+  function createInventoryEquipmentRowMarker(text, color) {
+    const marker = document.createElement("span");
+    marker.className = "gao-ext-inventory-row-marker";
+    marker.style.color = color;
+    marker.textContent = text;
+    return marker;
+  }
+
+  function createInventoryEquipmentRowStats(options) {
+    const { equipment, durability, maxDurability } = options;
+    const stats = document.createElement("div");
+    stats.className = "gao-ext-inventory-row-stats";
+    stats.append(
+      createInventoryEquipmentStat("ATK", equipment.atk),
+      createInventoryEquipmentStat("DEF", equipment.def),
+      createInventoryEquipmentStat("LUC", equipment.luck),
+      createInventoryEquipmentStat("WT", equipment.weight),
+      createInventoryEquipmentStat(
+        "DUR",
+        `${durability}/${maxDurability}`,
+        Number(durability) <= 0,
+      ),
+    );
+    return stats;
+  }
+
+  function createInventoryEquipmentStat(label, value, isBroken = false) {
+    const stat = document.createElement("span");
+    const tag = document.createElement("span");
+    tag.className = "gao-ext-inventory-stat-tag";
+    tag.textContent = label;
+    const statValue = document.createElement("span");
+    statValue.className = "gao-ext-inventory-stat-value";
+    statValue.dataset.broken = String(isBroken);
+    statValue.textContent = String(value ?? 0);
+    stat.append(tag, statValue);
+    return stat;
   }
 
   function renderInventoryBaseStatsInline(detail, itemId, equipment) {
@@ -1706,19 +1963,6 @@
     }
   }
 
-  function calculateBaseStatValue({
-    currentValue,
-    nameRoll,
-    quality,
-    statLabel,
-  }) {
-    if (statLabel === "WT") {
-      return Math.floor((currentValue * nameRoll) / quality.weightMult);
-    }
-
-    return Math.floor(currentValue / nameRoll / quality.qualityMult);
-  }
-
   function getQualityByRoll(qualityRoll) {
     const roll = Number(qualityRoll);
 
@@ -1749,12 +1993,10 @@
     return {
       statLabel: field.statLabel,
       error: "",
-      value: calculateBaseStatValue({
-        currentValue,
-        nameRoll,
-        quality,
-        statLabel: field.statLabel,
-      }),
+      value:
+        field.statLabel === "WT"
+          ? Math.floor((currentValue * nameRoll) / quality.weightMult)
+          : Math.floor(currentValue / nameRoll / quality.qualityMult),
     };
   }
 
