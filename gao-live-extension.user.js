@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.4.1
+// @version      0.4.2
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -742,6 +742,8 @@
     style.setAttribute(ATTR, "styles");
     style.textContent = `
       .${HIDDEN} { display: none !important; }
+      .inv-center { min-width: 0 !important; }
+      .grid-wrap { min-width: 0 !important; width: 100% !important; max-width: 100% !important; }
       .gao-ext-details { border: 1px solid var(--border-faint); background: var(--bg-elevated); margin-top: var(--s-3); }
       .gao-ext-details > summary { cursor: pointer; padding: var(--s-3) var(--s-4); font-family: var(--font-display); font-size: 11px; font-weight: 800; letter-spacing: var(--tracking-widest); color: var(--cyan-300); }
       .gao-ext-panel { padding: 0 var(--s-4) var(--s-4); display: flex; flex-direction: column; gap: var(--s-2); }
@@ -785,20 +787,24 @@
       .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat { margin-left: 4px; font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat[data-state="error"] { color: var(--danger-300, #ff8a8a); }
-      .gao-ext-inventory-layout-toggle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; padding: 2px 8px; border: 1px solid var(--border-soft); background: none; color: var(--text-muted); cursor: pointer; }
+      .gao-ext-inventory-layout-toggle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; padding: 2px 8px; border: 1px solid var(--border-strong); background: none; color: var(--text-secondary); cursor: pointer; }
       .gao-ext-inventory-layout-toggle[data-mode="list"] { color: var(--cyan-300); border-color: var(--cyan-400); background: rgba(0, 203, 240, 0.08); }
-      .gao-ext-inventory-list { display: flex; flex-direction: column; gap: 6px; width: 100%; max-height: 600px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; box-sizing: border-box; }
+      .gao-ext-inventory-list { display: grid; gap: 6px; width: 100%; max-height: 600px; overflow-y: auto; overflow-x: auto; padding-right: 4px; box-sizing: border-box; }
       .gao-ext-inventory-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: var(--bg-panel); border: 1px solid var(--border-soft); cursor: pointer; transition: all 0.15s ease-out; box-sizing: border-box; width: 100%; font: inherit; text-align: left; }
       .gao-ext-inventory-row:hover { background: rgba(255, 255, 255, 0.02); border-color: var(--border-strong); }
       .gao-ext-inventory-row[data-selected="true"] { background: rgba(0, 203, 240, 0.08); border-color: var(--cyan-400); box-shadow: 0 0 12px rgba(0, 203, 240, 0.15); }
-      .gao-ext-inventory-row-main { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; margin-right: 12px; }
-      .gao-ext-inventory-row-type { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); width: 32px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .gao-ext-inventory-row-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .gao-ext-inventory-row-main { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-right: 4px; }
+      .gao-ext-inventory-row-type { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); width: 32px; flex-shrink: 0; }
+      .gao-ext-inventory-row-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
       .gao-ext-inventory-row-marker { font-size: 10px; flex-shrink: 0; font-family: var(--font-mono); font-weight: 600; }
-      .gao-ext-inventory-row-stats { display: grid; grid-template-columns: 62px 56px 52px 52px 90px; gap: 2px; flex-shrink: 0; text-align: left; }
+      .gao-ext-inventory-row-stats { display: grid; grid-template-columns: 62px 56px 52px 52px 90px; gap: 2px; flex-shrink: 0; text-align: right; }
       .gao-ext-inventory-stat-tag { color: var(--text-muted); margin-right: 4px; font-size: 10px; }
       .gao-ext-inventory-stat-value { font-weight: 500; color: var(--lime-300); }
       .gao-ext-inventory-stat-value[data-broken="true"] { color: var(--red-400); }
+      .gao-ext-inventory-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 2px 10px; background: var(--bg-elevated); border-bottom: 2px solid var(--border-strong); box-sizing: border-box; width: 100%; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+      .gao-ext-inventory-header-main { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-right: 32px; flex: 1; min-width: 0; }
+      .gao-ext-inventory-header-clickable { cursor: pointer; transition: color 0.15s ease-out; user-select: none; }
+      .gao-ext-inventory-header-clickable:hover { color: var(--cyan-300); text-shadow: 0 0 6px var(--cyan-glow); }
       .gao-ext-settings-stack { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
       .gao-ext-settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding: var(--s-4); background: var(--bg-elevated); border: 1px solid var(--border-faint); }
       .gao-ext-settings-copy { min-width: 0; }
@@ -1731,20 +1737,24 @@
       toggle = createInventoryEquipmentLayoutToggle();
       controls.insertBefore(toggle, controls.firstChild);
     }
-    if (toggle.dataset.mode === inventoryEquipmentLayoutMode) {
-      return;
-    }
+
     const isListMode =
       inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_LIST;
-    toggle.dataset.mode = inventoryEquipmentLayoutMode;
-    toggle.setAttribute("aria-pressed", String(isListMode));
+    if (toggle.dataset.mode !== inventoryEquipmentLayoutMode) {
+      toggle.dataset.mode = inventoryEquipmentLayoutMode;
+      toggle.setAttribute("aria-pressed", String(isListMode));
+    }
 
     if (inventoryEquipmentLayoutMode === INVENTORY_LAYOUT_MODE_GRID) {
-      grid.classList.remove(HIDDEN);
+      if (grid.classList.contains(HIDDEN)) {
+        grid.classList.remove(HIDDEN);
+      }
       wrapper.querySelector(`[${ATTR}="inventory-list"]`)?.remove();
       return;
     }
-    grid.classList.add(HIDDEN);
+    if (!grid.classList.contains(HIDDEN)) {
+      grid.classList.add(HIDDEN);
+    }
     let list = wrapper.querySelector(`[${ATTR}="inventory-list"]`);
     if (!list) {
       list = document.createElement("div");
@@ -1756,7 +1766,12 @@
     }
     const items = readVisibleInventoryEquipment(grid);
     if (!shouldRenderInventoryEquipmentList(list, items)) return;
-    list.replaceChildren(...items.map(createInventoryEquipmentListRow));
+
+    const headerRow = createInventoryEquipmentListHeader();
+    list.replaceChildren(
+      headerRow,
+      ...items.map(createInventoryEquipmentListRow),
+    );
   }
 
   function readVisibleInventoryEquipment(grid) {
@@ -1805,6 +1820,49 @@
       })),
     );
     return true;
+  }
+
+  function createInventoryEquipmentListHeader() {
+    const header = document.createElement("div");
+    header.className = "gao-ext-inventory-header";
+
+    const main = document.createElement("div");
+    main.className = "gao-ext-inventory-header-main";
+
+    const type = document.createElement("span");
+    type.className =
+      "gao-ext-inventory-row-type gao-ext-inventory-header-clickable";
+    type.textContent = "種類";
+    type.addEventListener("click", () => clickOriginalSortButton("種類"));
+
+    const name = document.createElement("span");
+    name.style.flex = "1";
+    name.style.minWidth = "0";
+    name.textContent = "名稱";
+
+    main.append(type, name);
+
+    const stats = document.createElement("div");
+    stats.className = "gao-ext-inventory-row-stats";
+
+    const columns = [
+      { label: "攻擊" },
+      { label: "防禦" },
+      { label: "幸運" },
+      { label: "重量" },
+      { label: "耐久" },
+    ];
+
+    columns.forEach((col) => {
+      const span = document.createElement("span");
+      span.className = "gao-ext-inventory-header-clickable";
+      span.textContent = col.label;
+      span.addEventListener("click", () => clickOriginalSortButton(col.label));
+      stats.append(span);
+    });
+
+    header.append(main, stats);
+    return header;
   }
 
   function createInventoryEquipmentListRow({ cell, equipment }) {
@@ -1888,12 +1946,11 @@
     const stats = document.createElement("div");
     stats.className = "gao-ext-inventory-row-stats";
     stats.append(
-      createInventoryEquipmentStat("ATK", equipment.atk),
-      createInventoryEquipmentStat("DEF", equipment.def),
-      createInventoryEquipmentStat("LUC", equipment.luck),
-      createInventoryEquipmentStat("WT", equipment.weight),
+      createInventoryEquipmentStat(equipment.atk),
+      createInventoryEquipmentStat(equipment.def),
+      createInventoryEquipmentStat(equipment.luck),
+      createInventoryEquipmentStat(equipment.weight),
       createInventoryEquipmentStat(
-        "DUR",
         `${durability}/${maxDurability}`,
         Number(durability) <= 0,
       ),
@@ -1901,17 +1958,30 @@
     return stats;
   }
 
-  function createInventoryEquipmentStat(label, value, isBroken = false) {
-    const stat = document.createElement("span");
-    const tag = document.createElement("span");
-    tag.className = "gao-ext-inventory-stat-tag";
-    tag.textContent = label;
+  function createInventoryEquipmentStat(value, isBroken = false) {
     const statValue = document.createElement("span");
     statValue.className = "gao-ext-inventory-stat-value";
     statValue.dataset.broken = String(isBroken);
     statValue.textContent = String(value ?? 0);
-    stat.append(tag, statValue);
-    return stat;
+    return statValue;
+  }
+
+  function clickOriginalSortButton(label) {
+    const segButtons = document.querySelectorAll(".toolbar .seg button");
+    for (const btn of segButtons) {
+      const text = btn.textContent.trim();
+      if (
+        (label === "種類" && text === "種類") ||
+        (label === "攻擊" && text === "攻") ||
+        (label === "防禦" && text === "防") ||
+        (label === "幸運" && text === "幸") ||
+        (label === "重量" && text === "重") ||
+        (label === "耐久" && text === "耐")
+      ) {
+        btn.click();
+        return;
+      }
+    }
   }
 
   function renderInventoryBaseStatsInline(detail, itemId, equipment) {
