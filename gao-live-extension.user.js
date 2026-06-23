@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.4.2
-// @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。此加強插件保證不會自動發送api請求，也不會修改任何現有的api請求參數。
+// @version      0.4.3
+// @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
 // @grant        none
@@ -802,7 +802,7 @@
       .gao-ext-inventory-stat-value { font-weight: 500; color: var(--lime-300); }
       .gao-ext-inventory-stat-value[data-broken="true"] { color: var(--red-400); }
       .gao-ext-inventory-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 2px 10px; background: var(--bg-elevated); border-bottom: 2px solid var(--border-strong); box-sizing: border-box; width: 100%; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
-      .gao-ext-inventory-header-main { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-right: 32px; flex: 1; min-width: 0; }
+      .gao-ext-inventory-header-main { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: 3px; flex: 1; min-width: 0; }
       .gao-ext-inventory-header-clickable { cursor: pointer; transition: color 0.15s ease-out; user-select: none; }
       .gao-ext-inventory-header-clickable:hover { color: var(--cyan-300); text-shadow: 0 0 6px var(--cyan-glow); }
       .gao-ext-settings-stack { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
@@ -1830,8 +1830,8 @@
     main.className = "gao-ext-inventory-header-main";
 
     const type = document.createElement("span");
-    type.className =
-      "gao-ext-inventory-row-type gao-ext-inventory-header-clickable";
+    type.className = "gao-ext-inventory-header-clickable";
+    type.style = "width: 32px;";
     type.textContent = "種類";
     type.addEventListener("click", () => clickOriginalSortButton("種類"));
 
@@ -2067,10 +2067,7 @@
     return {
       statLabel: field.statLabel,
       error: "",
-      value:
-        field.statLabel === "WT"
-          ? Math.floor((currentValue * nameRoll) / quality.weightMult)
-          : Math.floor(currentValue / nameRoll / quality.qualityMult),
+      value: Math.floor(currentValue / nameRoll / quality.qualityMult),
     };
   }
 
