@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.5.2
+// @version      0.5.3
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -310,6 +310,7 @@
   let equipmentItems = [];
   let equipmentById = new Map();
   let inventoryEquipmentLayoutMode = readInventoryEquipmentLayoutMode();
+  let towerActionGuardInstalled = false;
   const inventoryEquipmentListRenderStates = new WeakMap();
   let towerAdvanceState = createEmptyTowerAdvanceState();
   const warnings = new Set();
@@ -317,6 +318,7 @@
   function boot() {
     installNetworkHooks();
     hookRouteChanges();
+    installTowerActionGuard();
     if (document.readyState === "loading") {
       document.addEventListener(
         "DOMContentLoaded",
@@ -723,6 +725,39 @@
   function disconnectForgeBootstrapObserver() {
     forgeBootstrapObserver?.disconnect();
     forgeBootstrapObserver = null;
+  }
+
+  function installTowerActionGuard() {
+    if (towerActionGuardInstalled) return;
+    towerActionGuardInstalled = true;
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (
+          location.pathname !== "/tower" ||
+          !towerAdvanceState.hasUnequipped
+        ) {
+          return;
+        }
+        const button =
+          event.target instanceof Element
+            ? event.target.closest("button")
+            : null;
+        if (!button) return;
+        const combatBlock = findTowerCombatBlock();
+        if (!combatBlock || !combatBlock.contains(button)) return;
+        if (
+          !isTowerActionButton(button, "戰鬥") &&
+          !isTowerActionButton(button, "趕路")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        syncTowerActionButtons(combatBlock, true);
+      },
+      true,
+    );
   }
 
   function findForgeParts(root) {
