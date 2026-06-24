@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.4.4
+// @version      0.5.0
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -20,6 +20,8 @@
   const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
   const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
   const ME_SNAPSHOT_KEY = "gao-ext-me-snapshot-v1";
+  const TOWER_ADVANCE_LOCK_MESSAGE =
+    "偵測到有裝備已卸下，已鎖定戰鬥與趕路；請先重新裝備。";
   const DISPLAY_THEME_KEY = "gao-ext-display-theme-v1";
   const DISPLAY_BACKGROUND_DISABLED_KEY =
     "gao-ext-display-background-disabled-v1";
@@ -311,6 +313,7 @@
   let inventoryEquipmentLayoutMode = readInventoryEquipmentLayoutMode();
   let inventoryDetailRetryTimer = 0;
   const inventoryEquipmentListRenderStates = new WeakMap();
+  let towerAdvanceState = createEmptyTowerAdvanceState();
   const warnings = new Set();
 
   function boot() {
@@ -340,12 +343,15 @@
   function mountForRoute() {
     const path = location.pathname;
     if (currentPath !== path) {
+      if (currentPath === "/tower" && path !== "/tower") {
+        towerAdvanceState = createEmptyTowerAdvanceState();
+      }
       currentPath = path;
       disconnectPageObserver();
     }
     if (path === "/tower") {
       return mountMainObservedPage(() => {
-        enhanceBattleReport();
+        syncTowerPageEnhancements();
       });
     }
     if (path === "/inventory") {
@@ -499,6 +505,7 @@
         isCraftRequest: requestPathMatches(url, /\/craft\/?$/i),
         isMeRequest: requestPathMatches(url, /\/me\/?$/i),
         isRecipesRequest: requestPathMatches(url, /\/recipes\/?$/i),
+        isAdvanceRequest: requestPathMatches(url, /\/advance\/?$/i),
         isEquipmentRequest: requestPathMatches(
           url,
           /\/api\/forge\/equipment\/?$/i,
@@ -555,6 +562,7 @@
       (!flags.isCraftRequest &&
         !flags.isMeRequest &&
         !flags.isRecipesRequest &&
+        !flags.isAdvanceRequest &&
         !flags.isEquipmentRequest)
     ) {
       return;
@@ -568,6 +576,10 @@
       }
       if (flags.isRecipesRequest) {
         mergeForgeMaterialMapFromInventory(payload?.inventory);
+        return;
+      }
+      if (flags.isAdvanceRequest) {
+        handleAdvanceResponse(payload);
         return;
       }
       if (flags.isEquipmentRequest) {
@@ -788,6 +800,22 @@
       .gao-ext-material-title { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.08em; }
       .gao-ext-material-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
       .gao-ext-material-list { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+      .gao-ext-tower-panel { position: relative; padding: var(--s-5); background: var(--bg-panel); border: 1px solid var(--border-soft); clip-path: polygon(0px 12px, 12px 0px, 100% 0px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0px 100%); }
+      .gao-ext-tower-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-4); padding-bottom: var(--s-3); border-bottom: 1px solid var(--border-soft); }
+      .gao-ext-tower-title { font-family: var(--font-display); font-size: var(--fs-xs); font-weight: 700; letter-spacing: var(--tracking-widest); text-transform: uppercase; color: var(--text-primary); display: flex; align-items: baseline; gap: var(--s-2); }
+      .gao-ext-tower-subtitle { font-family: "Noto Sans TC"; color: var(--text-tertiary); letter-spacing: var(--tracking-wider); }
+      .gao-ext-tower-update { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+      .gao-ext-tower-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+      .gao-ext-tower-card { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border-faint); background: var(--bg-elevated); min-width: 0; }
+      .gao-ext-tower-card-title { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.08em; }
+      .gao-ext-tower-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .gao-ext-tower-item { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-xs); }
+      .gao-ext-tower-item-name { color: var(--text-tertiary); min-width: 0; }
+      .gao-ext-tower-item-value { color: var(--lime-300); text-align: right; word-break: break-word; }
+      .gao-ext-tower-item-value[data-tone="warn"] { color: var(--gold-300); }
+      .gao-ext-tower-empty { margin-top: var(--s-3); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+      .gao-ext-tower-warning { margin-top: var(--s-3); padding: var(--s-3); border: 1px solid rgba(255, 140, 0, 0.35); background: rgba(255, 140, 0, 0.08); color: rgb(255, 187, 92); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: var(--lh-relax); }
+      .gao-ext-tower-action-locked { opacity: 0.65; cursor: not-allowed; }
       .gao-ext-inline-stat { margin-left: 4px; font-size: 11px; color: var(--text-tertiary); }
       .gao-ext-inline-stat[data-state="error"] { color: var(--danger-300, #ff8a8a); }
       .gao-ext-inventory-layout-toggle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; padding: 2px 8px; border: 1px solid var(--border-strong); background: none; color: var(--text-secondary); cursor: pointer; }
@@ -1047,6 +1075,86 @@
       console.error("GAO extension: /me snapshot read failed.", error);
       return null;
     }
+  }
+
+  function handleAdvanceResponse(payload) {
+    const result = payload?.myResult;
+    if (!result || typeof result !== "object") {
+      console.error(
+        "GAO extension: /advance payload has no myResult.",
+        payload,
+      );
+      return;
+    }
+    towerAdvanceState = normalizeTowerAdvanceState(result);
+    setTimeout(() => {
+      if (location.pathname === "/tower") syncTowerPageEnhancements();
+    }, MAX_DELAY_MS);
+  }
+
+  function createEmptyTowerAdvanceState() {
+    return Object.freeze({
+      updatedAt: "",
+      durabilityEntries: Object.freeze([]),
+      profEntries: Object.freeze([]),
+      hasUnequipped: false,
+    });
+  }
+
+  function normalizeTowerAdvanceState(result) {
+    const durabilityEntries = normalizeTowerDurabilityEntries(
+      result?.durability,
+    );
+    return Object.freeze({
+      updatedAt: new Date().toISOString(),
+      durabilityEntries,
+      profEntries: normalizeTowerProfEntries(result?.profGained),
+      hasUnequipped: durabilityEntries.some((entry) => entry.unequipped),
+    });
+  }
+
+  function normalizeTowerDurabilityEntries(durability) {
+    if (!durability || typeof durability !== "object") return Object.freeze([]);
+    const orderedKeys = [
+      ...Object.keys(INVENTORY_SLOT_LABEL_BY_KEY),
+      ...Object.keys(durability).filter(
+        (slotKey) => !Object.hasOwn(INVENTORY_SLOT_LABEL_BY_KEY, slotKey),
+      ),
+    ];
+    const entries = [];
+    for (const slotKey of orderedKeys) {
+      if (!Object.hasOwn(durability, slotKey)) continue;
+      const entry = durability[slotKey];
+      entries.push(
+        Object.freeze({
+          slotKey,
+          slotLabel: INVENTORY_SLOT_LABEL_BY_KEY[slotKey] || slotKey,
+          newDurability: Number(entry?.newDurability || 0),
+          maxDurability: Number(entry?.maxDurability || 0),
+          unequipped: entry?.unequipped === true,
+        }),
+      );
+    }
+    return Object.freeze(entries);
+  }
+
+  function normalizeTowerProfEntries(profGained) {
+    if (!profGained || typeof profGained !== "object") return Object.freeze([]);
+    const entries = [];
+    for (const [key, rawValue] of Object.entries(profGained)) {
+      const value = Number(rawValue || 0);
+      if (!Number.isFinite(value)) continue;
+      const typeLabel = INVENTORY_TYPE_LABEL_BY_TAG[key];
+      entries.push(
+        Object.freeze({
+          key,
+          label: typeLabel ? `${typeLabel} / ${key}` : key,
+          value,
+        }),
+      );
+    }
+    entries.sort((left, right) => right.value - left.value);
+    return Object.freeze(entries);
   }
 
   function handleCraftResponse(payload, pendingRequestId) {
@@ -2053,10 +2161,13 @@
             ]),
           ].join("|")
         : "none";
-    if (
-      detail.dataset.gaoExtBaseStats === signature &&
-      hasRenderedInventoryBaseStats(detail, equipment)
-    ) {
+    const renderedBaseStatsCount = detail.querySelectorAll(
+      `[${ATTR}="inventory-base-stat-inline"]`,
+    ).length;
+    const hasRenderedBaseStats = equipment
+      ? renderedBaseStatsCount === INVENTORY_BASE_STAT_FIELDS.length
+      : renderedBaseStatsCount === 0;
+    if (detail.dataset.gaoExtBaseStats === signature && hasRenderedBaseStats) {
       return;
     }
     detail.dataset.gaoExtBaseStats = signature;
@@ -2128,19 +2239,6 @@
     };
   }
 
-  function hasRenderedInventoryBaseStats(detail, equipment) {
-    if (!equipment) {
-      return (
-        detail.querySelectorAll(`[${ATTR}="inventory-base-stat-inline"]`)
-          .length === 0
-      );
-    }
-    return (
-      detail.querySelectorAll(`[${ATTR}="inventory-base-stat-inline"]`)
-        .length === INVENTORY_BASE_STAT_FIELDS.length
-    );
-  }
-
   function readPositiveRoll(value) {
     const normalized = Number(value);
     if (!Number.isFinite(normalized) || normalized <= 0) return null;
@@ -2168,6 +2266,157 @@
     `;
     const anchor = detail.querySelector(".actions") ?? detail.lastElementChild;
     anchor?.insertAdjacentElement("beforebegin", block);
+  }
+
+  function syncTowerPageEnhancements() {
+    syncTowerStatusPanel();
+    enhanceBattleReport();
+  }
+
+  function syncTowerStatusPanel() {
+    let combatBlock = null;
+    for (const block of document.querySelectorAll(".brackets")) {
+      const heading = block.querySelector("h3");
+      if (!heading?.textContent?.includes("蘑菇園")) continue;
+      const buttons = [...block.querySelectorAll("button")];
+      if (!buttons.some((button) => isTowerActionButton(button, "戰鬥"))) {
+        continue;
+      }
+      combatBlock = block;
+      break;
+    }
+    if (!combatBlock) return;
+    let panel = combatBlock.parentElement?.querySelector(
+      `[${ATTR}="tower-advance-panel"]`,
+    );
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "gao-ext-tower-panel brackets";
+      panel.setAttribute(ATTR, "tower-advance-panel");
+      panel.innerHTML = `
+        <span class="bracket-bl"></span>
+        <span class="bracket-br"></span>
+        <div class="gao-ext-tower-head">
+          <div class="gao-ext-tower-title">
+            ${escapeHtml("戰鬥狀態")}
+            <span class="gao-ext-tower-subtitle">${escapeHtml("COMBAT STATUS")}</span>
+          </div>
+          <div class="gao-ext-tower-update"></div>
+        </div>
+        <div class="gao-ext-tower-body"></div>
+      `;
+    }
+    if (panel.nextElementSibling !== combatBlock) {
+      combatBlock.insertAdjacentElement("beforebegin", panel);
+    }
+    renderTowerStatusPanel(panel, towerAdvanceState);
+    syncTowerActionButtons(combatBlock, towerAdvanceState.hasUnequipped);
+  }
+
+  function renderTowerStatusPanel(panel, state) {
+    const update = panel.querySelector(".gao-ext-tower-update");
+    const body = panel.querySelector(".gao-ext-tower-body");
+    if (!update || !body) return;
+    const updateTime = (() => {
+      if (!state.updatedAt) return "等待戰鬥結果";
+      const timestamp = Date.parse(state.updatedAt);
+      if (Number.isNaN(timestamp)) return "等待戰鬥結果";
+      return `更新時間 ${new Date(timestamp).toLocaleTimeString("zh-TW", {
+        hour12: false,
+      })}`;
+    })();
+    const statusMessage = (() => {
+      if (state.hasUnequipped) {
+        return `<div class="gao-ext-tower-warning">${escapeHtml(TOWER_ADVANCE_LOCK_MESSAGE)}</div>`;
+      }
+      if (state.durabilityEntries.length > 0 || state.profEntries.length > 0) {
+        return "";
+      }
+      return `<div class="gao-ext-tower-empty">${escapeHtml("尚未收到戰鬥結果；進行一次戰鬥或趕路後，這裡會顯示最新耐久與熟練變化。")}</div>`;
+    })();
+    setTextIfChanged(update, updateTime);
+    body.innerHTML = `
+      <div class="gao-ext-tower-grid">
+        ${buildTowerCardMarkup({
+          title: "耐久 / DURABILITY",
+          content: buildTowerDurabilityMarkup(state.durabilityEntries),
+        })}
+        ${buildTowerCardMarkup({
+          title: "熟練 / PROFICIENCY",
+          content: buildTowerProfMarkup(state.profEntries),
+        })}
+      </div>
+      ${statusMessage}
+    `;
+  }
+
+  function buildTowerCardMarkup(options) {
+    return `
+      <section class="gao-ext-tower-card">
+        <div class="gao-ext-tower-card-title">${escapeHtml(options.title)}</div>
+        <div class="gao-ext-tower-list">${options.content}</div>
+      </section>
+    `;
+  }
+
+  function buildTowerDurabilityMarkup(entries) {
+    if (entries.length === 0) {
+      return `<div class="gao-ext-tower-item"><span class="gao-ext-tower-item-name">${escapeHtml("尚未收到戰鬥結果")}</span><span class="gao-ext-tower-item-value">${escapeHtml("--")}</span></div>`;
+    }
+    return entries
+      .map((entry) => {
+        const suffix = entry.unequipped ? " · 已卸下" : "";
+        return `
+          <div class="gao-ext-tower-item">
+            <span class="gao-ext-tower-item-name">${escapeHtml(entry.slotLabel)}</span>
+            <span class="gao-ext-tower-item-value" data-tone="${entry.unequipped ? "warn" : "ok"}">${escapeHtml(`${entry.newDurability} / ${entry.maxDurability}${suffix}`)}</span>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function buildTowerProfMarkup(entries) {
+    if (entries.length === 0) {
+      return `<div class="gao-ext-tower-item"><span class="gao-ext-tower-item-name">${escapeHtml("本次沒有熟練增量")}</span><span class="gao-ext-tower-item-value">${escapeHtml("--")}</span></div>`;
+    }
+    return entries
+      .map(
+        (entry) => `
+          <div class="gao-ext-tower-item">
+            <span class="gao-ext-tower-item-name">${escapeHtml(entry.label)}</span>
+            <span class="gao-ext-tower-item-value">${escapeHtml(`+${entry.value}`)}</span>
+          </div>
+        `,
+      )
+      .join("");
+  }
+
+  function syncTowerActionButtons(combatBlock, shouldLock) {
+    for (const button of combatBlock.querySelectorAll("button")) {
+      if (
+        !isTowerActionButton(button, "戰鬥") &&
+        !isTowerActionButton(button, "趕路")
+      ) {
+        continue;
+      }
+      if (shouldLock) {
+        button.disabled = true;
+        button.dataset.gaoExtTowerLocked = "1";
+        button.classList.add("gao-ext-tower-action-locked");
+        button.title = TOWER_ADVANCE_LOCK_MESSAGE;
+        continue;
+      }
+      if (button.dataset.gaoExtTowerLocked !== "1") continue;
+      button.disabled = false;
+      button.classList.remove("gao-ext-tower-action-locked");
+      button.removeAttribute("title");
+      delete button.dataset.gaoExtTowerLocked;
+    }
+  }
+
+  function isTowerActionButton(button, label) {
+    return button.textContent.replace(/\s+/g, "").includes(label);
   }
 
   // 把原始戰報拆成「掉落物」與「戰報」兩個可折疊區塊，
