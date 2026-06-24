@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.4.3
+// @version      0.4.4
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -137,6 +137,7 @@
   const INVENTORY_LAYOUT_MODE_GRID = "grid";
   const INVENTORY_LAYOUT_MODE_LIST = "list";
   const INVENTORY_LAYOUT_MODE_KEY = "gao-ext-inventory-layout-v1";
+  const INVENTORY_DETAIL_SYNC_RETRY_LIMIT = 3;
   const INVENTORY_EQUIPMENT_GRID_SELECTOR = ".inv-center .grid-wrap .igrid";
   const INVENTORY_QUALITY_COLOR_BY_NAME = Object.freeze({
     傳說: "var(--q-legendary)",
@@ -308,6 +309,7 @@
   let equipmentItems = [];
   let equipmentById = new Map();
   let inventoryEquipmentLayoutMode = readInventoryEquipmentLayoutMode();
+  let inventoryDetailRetryTimer = 0;
   const inventoryEquipmentListRenderStates = new WeakMap();
   const warnings = new Set();
 
@@ -696,6 +698,7 @@
   function disconnectPageObserver() {
     pageObserver?.disconnect();
     pageObserver = null;
+    clearInventoryDetailRetry();
     disconnectForgeBootstrapObserver();
   }
 
@@ -1655,18 +1658,51 @@
   }
 
   // 背包詳情切換時，同步這件裝備的鍛造材料摘要與原始最大屬性。
-  function syncInventoryDetailEnhancements() {
+  function syncInventoryDetailEnhancements(retryCount = 0) {
     const detail = document.querySelector(".inv-right .detail-card");
     if (!detail) return;
-    const equipment = readReactFiber(detail, "detail").return?.memoizedProps
-      ?.eq;
-    if (!equipment || typeof equipment !== "object") {
-      throw new Error("GAO extension: detail Fiber equipment prop missing.");
+    const selectedCell = document.querySelector(
+      `${INVENTORY_EQUIPMENT_GRID_SELECTOR} > .cell.cell--filled.cell--selected`,
+    );
+    const selectedItemId = selectedCell
+      ? normalizeNumericId(
+          readReactFiber(selectedCell, "selected inventory equipment").key,
+        )
+      : null;
+    if (selectedCell && !selectedItemId) {
+      throw new Error(
+        "GAO extension: selected inventory equipment Fiber key missing.",
+      );
     }
-    const itemId = normalizeNumericId(equipment.id);
-    if (!itemId) {
-      throw new Error("GAO extension: inventory detail equipment id missing.");
+    const fiberEquipment = readInventoryDetailEquipmentFromFiber(detail);
+    const fiberItemId = normalizeNumericId(fiberEquipment?.id);
+    const itemId = selectedItemId || fiberItemId;
+    const equipment =
+      (itemId ? equipmentById.get(itemId) : null) ?? fiberEquipment;
+    let pendingReason = "";
+    if (selectedItemId && fiberItemId && selectedItemId !== fiberItemId) {
+      pendingReason = `selection/detail mismatch (${selectedItemId} !== ${fiberItemId})`;
+    } else if (!itemId) {
+      pendingReason = "item id missing";
+    } else if (!equipment || normalizeNumericId(equipment.id) !== itemId) {
+      pendingReason = `equipment missing for item ${itemId}`;
     }
+    if (pendingReason) {
+      if (retryCount >= INVENTORY_DETAIL_SYNC_RETRY_LIMIT) {
+        throw new Error(
+          `GAO extension: inventory detail sync unresolved (${pendingReason}).`,
+        );
+      }
+      if (inventoryDetailRetryTimer) return;
+      const path = location.pathname;
+      inventoryDetailRetryTimer = setTimeout(() => {
+        inventoryDetailRetryTimer = 0;
+        if (location.pathname !== path) return;
+        syncInventoryDetailEnhancements(retryCount + 1);
+      }, MAX_DELAY_MS);
+      return;
+    }
+    clearInventoryDetailRetry();
     const entry = itemId
       ? (readForgeHistory().find(
           (historyEntry) => historyEntry.craftedId === itemId,
@@ -1674,6 +1710,27 @@
       : null;
     renderInventoryBaseStatsInline(detail, itemId, equipment);
     renderInventoryForgeMaterials(detail, itemId, entry);
+  }
+
+  function readInventoryDetailEquipmentFromFiber(detail) {
+    const fiber = readReactFiber(detail, "detail");
+    const visited = new Set();
+    for (let node = fiber; node; node = node.return) {
+      for (const candidate of [node, node.alternate]) {
+        if (!candidate || visited.has(candidate)) continue;
+        visited.add(candidate);
+        const equipment =
+          candidate.memoizedProps?.eq ?? candidate.pendingProps?.eq;
+        if (equipment) return equipment;
+      }
+    }
+    return null;
+  }
+
+  function clearInventoryDetailRetry() {
+    if (!inventoryDetailRetryTimer) return;
+    clearTimeout(inventoryDetailRetryTimer);
+    inventoryDetailRetryTimer = 0;
   }
 
   function readReactFiber(element, label) {
