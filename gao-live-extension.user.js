@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.5.1
+// @version      0.5.2
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -349,7 +349,8 @@
     }
     if (path === "/tower") {
       return mountMainObservedPage(() => {
-        syncTowerPageEnhancements();
+        enhanceBattleReport();
+        ensureTowerStatusPanelInitialized();
       });
     }
     if (path === "/inventory") {
@@ -1085,7 +1086,7 @@
     }
     towerAdvanceState = normalizeTowerAdvanceState(result);
     setTimeout(() => {
-      if (location.pathname === "/tower") syncTowerPageEnhancements();
+      if (location.pathname === "/tower") syncTowerStatusPanel();
     }, MAX_DELAY_MS);
   }
 
@@ -2211,23 +2212,29 @@
     anchor?.insertAdjacentElement("beforebegin", block);
   }
 
-  function syncTowerPageEnhancements() {
+  function ensureTowerStatusPanelInitialized() {
+    const combatBlock = findTowerCombatBlock();
+    if (!combatBlock) return;
+    const panel = combatBlock.parentElement?.querySelector(
+      `[${ATTR}="tower-advance-panel"]`,
+    );
+    if (panel) return;
     syncTowerStatusPanel();
-    enhanceBattleReport();
   }
 
-  function syncTowerStatusPanel() {
+  function findTowerCombatBlock() {
     let combatBlock = null;
     for (const block of document.querySelectorAll(".brackets")) {
       const heading = block.querySelector("h3");
-      if (!heading?.textContent?.includes("蘑菇園")) continue;
-      const buttons = [...block.querySelectorAll("button")];
-      if (!buttons.some((button) => isTowerActionButton(button, "戰鬥"))) {
-        continue;
-      }
+      if (!heading?.textContent?.includes("戰鬥")) continue;
       combatBlock = block;
       break;
     }
+    return combatBlock;
+  }
+
+  function syncTowerStatusPanel() {
+    const combatBlock = findTowerCombatBlock();
     if (!combatBlock) return;
     let panel = combatBlock.parentElement?.querySelector(
       `[${ATTR}="tower-advance-panel"]`,
