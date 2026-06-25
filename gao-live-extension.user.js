@@ -2298,8 +2298,8 @@
           </div>
           <div class="gao-ext-tower-meta">
             <div class="gao-ext-tower-update"></div>
-            <button type="button" class="gao-ext-inventory-layout-toggle" ${ATTR}="tower-action-guard-toggle">鎖定戰鬥</button>
-            <span class="gao-ext-tower-toggle-note">${escapeHtml("(切換後請重新整理)")}</span>
+            <button type="button" class="gao-ext-inventory-layout-toggle" ${ATTR}="tower-action-guard-toggle">爆裝鎖定戰鬥</button>
+            <span class="gao-ext-tower-toggle-note">${escapeHtml("(切換後請重整)")}</span>
           </div>
         </div>
         <div class="gao-ext-tower-body"></div>
