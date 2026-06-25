@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.5.4
+// @version      0.5.5
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -1121,7 +1121,7 @@
   }
 
   function handleAdvanceResponse(payload) {
-    const result = payload?.myResult;
+    const result = payload?.myResult ? payload.myResult : payload;
     if (!result || typeof result !== "object") {
       console.error(
         "GAO extension: /advance payload has no myResult.",
