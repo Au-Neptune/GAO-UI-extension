@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gun Art Online UI Extension
 // @namespace    o_z_
-// @version      0.5.3
+// @version      0.5.4
 // @description  Gun Art Online 前端加強輔助，提供鍛造歷史紀錄、裝備分數及白值顯示、戰報摺疊、背景風格轉換等功能。
 // @match        https://gunartonline.pages.dev/*
 // @run-at       document-start
@@ -20,6 +20,8 @@
   const FORGE_HISTORY_KEY = "gao-ext-forge-history-v2";
   const FORGE_MATERIAL_MAP_KEY = "gao-ext-forge-material-map-v1";
   const ME_SNAPSHOT_KEY = "gao-ext-me-snapshot-v1";
+  const TOWER_ACTION_GUARD_ENABLED_KEY =
+    "gao-ext-tower-action-guard-enabled-v1";
   const TOWER_ADVANCE_LOCK_MESSAGE =
     "偵測到有裝備已卸下，已鎖定戰鬥與趕路；請先重新裝備。";
   const DISPLAY_THEME_KEY = "gao-ext-display-theme-v1";
@@ -312,6 +314,11 @@
   let inventoryEquipmentLayoutMode = readInventoryEquipmentLayoutMode();
   let towerActionGuardInstalled = false;
   const inventoryEquipmentListRenderStates = new WeakMap();
+  const storedTowerActionGuardPreference = localStorage.getItem(
+    TOWER_ACTION_GUARD_ENABLED_KEY,
+  );
+  let towerActionGuardActive = storedTowerActionGuardPreference !== "false";
+  let towerActionGuardPreference = towerActionGuardActive;
   let towerAdvanceState = createEmptyTowerAdvanceState();
   const warnings = new Set();
 
@@ -735,6 +742,7 @@
       (event) => {
         if (
           location.pathname !== "/tower" ||
+          !towerActionGuardActive ||
           !towerAdvanceState.hasUnequipped
         ) {
           return;
@@ -837,7 +845,9 @@
       .gao-ext-tower-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-4); padding-bottom: var(--s-3); border-bottom: 1px solid var(--border-soft); }
       .gao-ext-tower-title { font-family: var(--font-display); font-size: var(--fs-xs); font-weight: 700; letter-spacing: var(--tracking-widest); text-transform: uppercase; color: var(--text-primary); display: flex; align-items: baseline; gap: var(--s-2); }
       .gao-ext-tower-subtitle { font-family: "Noto Sans TC"; color: var(--text-tertiary); letter-spacing: var(--tracking-wider); }
+      .gao-ext-tower-meta { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2); flex-wrap: wrap; }
       .gao-ext-tower-update { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+      .gao-ext-tower-toggle-note { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
       .gao-ext-tower-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
       .gao-ext-tower-card { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); border: 1px solid var(--border-faint); background: var(--bg-elevated); min-width: 0; }
       .gao-ext-tower-card-title { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.08em; }
@@ -2286,7 +2296,11 @@
             ${escapeHtml("戰鬥狀態")}
             <span class="gao-ext-tower-subtitle">${escapeHtml("COMBAT STATUS")}</span>
           </div>
-          <div class="gao-ext-tower-update"></div>
+          <div class="gao-ext-tower-meta">
+            <div class="gao-ext-tower-update"></div>
+            <button type="button" class="gao-ext-inventory-layout-toggle" ${ATTR}="tower-action-guard-toggle">鎖定戰鬥</button>
+            <span class="gao-ext-tower-toggle-note">${escapeHtml("(切換後請重新整理)")}</span>
+          </div>
         </div>
         <div class="gao-ext-tower-body"></div>
       `;
@@ -2294,8 +2308,37 @@
     if (panel.nextElementSibling !== combatBlock) {
       combatBlock.insertAdjacentElement("beforebegin", panel);
     }
+    const guardToggle = panel.querySelector(
+      `[${ATTR}="tower-action-guard-toggle"]`,
+    );
+    if (guardToggle) {
+      if (guardToggle.dataset.gaoExtBound !== "1") {
+        guardToggle.dataset.gaoExtBound = "1";
+        guardToggle.addEventListener("click", () => {
+          towerActionGuardPreference = !towerActionGuardPreference;
+          localStorage.setItem(
+            TOWER_ACTION_GUARD_ENABLED_KEY,
+            String(towerActionGuardPreference),
+          );
+          syncTowerStatusPanel();
+        });
+      }
+      guardToggle.dataset.mode = towerActionGuardPreference
+        ? INVENTORY_LAYOUT_MODE_LIST
+        : INVENTORY_LAYOUT_MODE_GRID;
+      guardToggle.setAttribute(
+        "aria-pressed",
+        String(towerActionGuardPreference),
+      );
+      guardToggle.title = towerActionGuardPreference
+        ? "已啟用鎖定戰鬥功能；重整後生效"
+        : "已停用鎖定戰鬥功能；重整後生效";
+    }
     renderTowerStatusPanel(panel, towerAdvanceState);
-    syncTowerActionButtons(combatBlock, towerAdvanceState.hasUnequipped);
+    syncTowerActionButtons(
+      combatBlock,
+      towerActionGuardActive && towerAdvanceState.hasUnequipped,
+    );
   }
 
   function renderTowerStatusPanel(panel, state) {
@@ -2312,6 +2355,9 @@
     })();
     const statusMessage = (() => {
       if (state.hasUnequipped) {
+        if (!towerActionGuardActive) {
+          return `<div class="gao-ext-tower-warning">${escapeHtml("偵測到有裝備已卸下；目前未啟用鎖定戰鬥功能。")}</div>`;
+        }
         return `<div class="gao-ext-tower-warning">${escapeHtml(TOWER_ADVANCE_LOCK_MESSAGE)}</div>`;
       }
       if (state.durabilityEntries.length > 0 || state.profEntries.length > 0) {
